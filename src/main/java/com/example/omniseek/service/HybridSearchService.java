@@ -122,7 +122,7 @@ public class HybridSearchService {
 
                 // 第二阶段 BM25 rescore，0.2*KNN 分 + 1.0*BM25 分
                 // KNN 得分一般是 [0,1]，BM25 得分是 [0,+∞) 通常是几十，所以需要调整权重
-                s.rescore(r -> r
+                /* s.rescore(r -> r
                         .windowSize(recallK)
                         .query(rq -> rq
                                 .queryWeight(0.2d) // 保留部分 KNN 分
@@ -130,7 +130,15 @@ public class HybridSearchService {
                                 .query(rqq -> rqq.match(m -> m
                                         .field("textContent")
                                         .query(query)
-                                        .operator(Operator.And)))));
+                                        .operator(Operator.And))))); */
+
+                // 使用 RRF (Reciprocal Rank Fusion) 合并 KNN 和 BM25 的结果
+                // RRF 不需要手动调整权重，它通过排名来融合不同来源的结果，对分值量级不敏感
+                // 对于不同来源的结果：score(chunk) = (1 / (k + rank))，其中 k 是平滑参数，通常取 60。
+                s.rank(r -> r.rrf(rrf -> rrf
+                        .windowSize((long) recallK)
+                        .rankConstant((long) 60)));
+
                 s.size(topK);
                 return s;
             }, EsDocument.class);
