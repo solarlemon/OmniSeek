@@ -46,7 +46,7 @@ public class DeepSeekClient {
             List<Map<String, String>> history,
             Consumer<String> onChunk,
             Consumer<Throwable> onError) {
-
+        // 构建请求时明确指出需要流式响应 stream
         Map<String, Object> request = buildRequest(userMessage, context, history);
 
         webClient.post()
@@ -54,9 +54,9 @@ public class DeepSeekClient {
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(request)
                 .retrieve()
-                .bodyToFlux(String.class)
+                .bodyToFlux(String.class) // 转换成响应式流（FLUX）
                 .subscribe(
-                        chunk -> processChunk(chunk, onChunk),
+                        chunk -> processChunk(chunk, onChunk), // 处理每个响应块
                         onError);
     }
 
@@ -93,9 +93,9 @@ public class DeepSeekClient {
          * 构建 DeepSeek API 请求的消息列表，包含System Message （系统指令/人设）、History Messages （历史对话记录）
          * User Message （当前提问），具体返回值如下：
          * [
-            * { "role": "system", "content": "你是企业知识库助手…" },
-            * { "role": "system", "content": "<<REF>>\n[1] …检索片段…\n<<END>>" },
-            * { "role": "user", "content": "请解释合同中不可抗力条款" }
+         * { "role": "system", "content": "你是企业知识库助手…" },
+         * { "role": "system", "content": "<<REF>>\n[1] …检索片段…\n<<END>>" },
+         * { "role": "user", "content": "请解释合同中不可抗力条款" }
          * ]
          */
         List<Map<String, String>> messages = new ArrayList<>();
@@ -140,6 +140,9 @@ public class DeepSeekClient {
     }
 
     private void processChunk(String chunk, Consumer<String> onChunk) {
+        /*
+         * SSE数据解析：处理 DeepSeek API 流式响应块，提取内容并传递给回调函数
+         */
         try {
             // 检查是否是结束标记
             if ("[DONE]".equals(chunk)) {

@@ -27,6 +27,9 @@ public class ChatController extends TextWebSocketHandler {
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+        /*
+         * WebSocket建立前后端双向通信通道，接收用户输入的消息
+         */
         String userMessage = message.getPayload();
         String userId = session.getId(); // Use session ID as userId for simplicity
 
