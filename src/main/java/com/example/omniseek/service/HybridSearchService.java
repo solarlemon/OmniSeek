@@ -75,7 +75,7 @@ public class HybridSearchService {
             // TODO: 实现查询改写以及意图识别（或者HyDE (Hypothetical Document Embeddings)）
             // 多轮对话中，根据用户之前的查询历史，对当前查询进行改写，提高搜索效率
             // 判断用户是在“查知识”、“闲聊”还是“要求执行操作”。如果是闲聊，可以直接跳过 RAG 检索，节省资源。
-            // 先让大模型生成一个伪答案，再用伪答案去搜知识库（这在处理“问题与答案表达差异大”时非常有效）
+            // HyDE：先让大模型生成一个伪答案，再用伪答案去搜知识库（这在处理“问题与答案表达差异大”时非常有效）
 
             // 根据查询的文本字符生成查询向量
             final List<Float> queryVector = embedToVectorList(query);
