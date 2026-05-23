@@ -53,6 +53,9 @@ public class ChatHandler {
     }
 
     public void processMessage(String userId, String userMessage, WebSocketSession session) {
+        /*
+         * 处理用户消息，包括获取或创建会话、执行搜索、调用 DeepSeek API 等
+         */
         logger.info("开始处理消息，用户ID: {}, 会话ID: {}", userId, session.getId());
         try {
             // 1. 获取或创建会话 ID
@@ -79,6 +82,7 @@ public class ChatHandler {
             // 5. 调用 DeepSeek API 并处理流式响应
             logger.info("调用DeepSeek API生成回复");
             //  streamResponse中包含System Message （系统指令/人设）、History Messages （历史对话记录）、User Message （当前提问）三部分
+            // SSE数据解析：处理大模型流式响应块，提取内容并传递给回调函数
             deepSeekClient.streamResponse(userMessage, context, history,
                     // 当大模型生成一部分文字（Chunk）时，回调函数会立即触发，用于累积响应内容
                     chunk -> {
