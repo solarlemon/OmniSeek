@@ -127,9 +127,9 @@ public class UploadController {
             // 分片上传
             uploadService.uploadChunk(fileMd5, chunkIndex, totalSize, fileName, file, orgTag, isPublic, userId);
             
-            List<Integer> uploadedChunks = uploadService.getUploadedChunks(fileMd5);
-            int actualTotalChunks = uploadService.getTotalChunks(fileMd5);
-            double progress = calculateProgress(uploadedChunks, actualTotalChunks);
+            List<Integer> uploadedChunks = uploadService.getUploadedChunks(fileMd5); // 根据对应的fileMd5获取已上传的分片列表
+            int actualTotalChunks = uploadService.getTotalChunks(fileMd5); // 获取文件的总分片数
+            double progress = calculateProgress(uploadedChunks, actualTotalChunks); // 计算上传进度
             
             LogUtils.logBusiness("UPLOAD_CHUNK", userId, "分片上传成功: fileMd5=%s, fileName=%s, fileType=%s, chunkIndex=%d, 进度=%.2f%%", 
                     fileMd5, fileName, fileType, chunkIndex, progress);
