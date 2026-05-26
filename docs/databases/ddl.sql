@@ -9,6 +9,7 @@ CREATE TABLE users (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     INDEX idx_username (username) COMMENT '用户名索引'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表';
+
 CREATE TABLE organization_tags (
     tag_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY COMMENT '标签唯一标识',
     name VARCHAR(100) NOT NULL COMMENT '标签名称',
@@ -20,7 +21,6 @@ CREATE TABLE organization_tags (
     FOREIGN KEY (parent_tag) REFERENCES organization_tags(tag_id) ON DELETE SET NULL,
     FOREIGN KEY (created_by) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='组织标签表';
-
 
 CREATE TABLE file_upload (
     id           BIGINT           NOT NULL AUTO_INCREMENT COMMENT '主键',
@@ -38,6 +38,7 @@ CREATE TABLE file_upload (
     INDEX idx_user (user_id),
     INDEX idx_org_tag (org_tag)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='文件上传记录';
+
 CREATE TABLE chunk_info (
     id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '分块记录唯一标识',
     file_md5 VARCHAR(32) NOT NULL COMMENT '关联的文件MD5值',
