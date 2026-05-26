@@ -262,8 +262,8 @@ public class UploadController {
             int totalChunks = uploadService.getTotalChunks(request.fileMd5());
             LogUtils.logBusiness("MERGE_FILE", userId, "分片上传状态: fileMd5=%s, fileName=%s, 已上传=%d/%d", 
                     request.fileMd5(), request.fileName(), uploadedChunks.size(), totalChunks);
-            
             if (uploadedChunks.size() < totalChunks) {
+                // 如果分片未全部上传，则返回错误
                 LogUtils.logUserOperation(userId, "MERGE_FILE", request.fileMd5(), "FAILED_INCOMPLETE_CHUNKS");
                 monitor.end("合并失败：分片未全部上传");
                 Map<String, Object> errorResponse = new HashMap<>();
@@ -282,7 +282,7 @@ public class UploadController {
                     request.fileMd5(), request.fileName(), fileType, fileUpload.getOrgTag(), fileUpload.isPublic());
             FileProcessingTask task = new FileProcessingTask(
                     request.fileMd5(),
-                    objectUrl,
+                    objectUrl, // 1 小时有效的预签名 URL 供下载
                     request.fileName(),
                     fileUpload.getUserId(),
                     fileUpload.getOrgTag(),
