@@ -8,6 +8,7 @@ import com.example.omniseek.repository.DocumentVectorRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -28,6 +29,9 @@ public class VectorizationService {
 
     @Autowired
     private DocumentVectorRepository documentVectorRepository;
+
+    @Value("${embedding.api.model:text-embedding-v4}")
+    private String modelVersion;
 
     /**
      * 执行向量化操作，并存储到 Elasticsearch
@@ -65,7 +69,7 @@ public class VectorizationService {
                             chunks.get(i).getChunkId(),
                             chunks.get(i).getContent(), // 保存原始文本内容
                             vectors.get(i),
-                            "text-embedding-v4", // 更新为 DeepSeek 的模型版本
+                            modelVersion,
                             userId,
                             orgTag,
                             isPublic))
