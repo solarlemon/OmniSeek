@@ -34,6 +34,9 @@ public class ParseService {
     @Value("${file.parsing.max-memory-threshold:0.8}")
     private double maxMemoryThreshold;
 
+    @Value("${embedding.api.model:text-embedding-v4}")
+    private String modelVersion;
+
     /**
      * 解析文件、分割文本内容为固定大小的块并保存文本内容到数据库
      *
@@ -55,7 +58,7 @@ public class ParseService {
         List<String> chunks = splitTextIntoChunks(textContent, chunkSize);
 
         // 保存每个文本块到数据库
-        saveChunks(fileMd5, chunks, userId, orgTag, isPublic);
+        saveChunks(fileMd5, chunks, modelVersion, userId, orgTag, isPublic);
 
         logger.info("文件解析完成，fileMd5: {}", fileMd5);
     }
@@ -367,13 +370,14 @@ public class ParseService {
      * @param orgTag   组织标签
      * @param isPublic 是否公开
      */
-    private void saveChunks(String fileMd5, List<String> chunks,
+    private void saveChunks(String fileMd5, List<String> chunks, String modelVersion,
             String userId, String orgTag, boolean isPublic) {
         for (int i = 0; i < chunks.size(); i++) {
             var vector = new DocumentVector();
             vector.setFileMd5(fileMd5);
             vector.setChunkId(i + 1);
             vector.setTextContent(chunks.get(i));
+            vector.setModelVersion(modelVersion);
             vector.setUserId(userId);
             vector.setOrgTag(orgTag);
             vector.setPublic(isPublic);
@@ -412,6 +416,6 @@ public class ParseService {
      */
     private void saveChunks(String fileMd5, List<String> chunks) {
         // 使用默认值调用新方法
-        saveChunks(fileMd5, chunks, "unknown", "DEFAULT", false);
+        saveChunks(fileMd5, chunks, modelVersion, "unknown", "DEFAULT", false);
     }
 }
