@@ -23,7 +23,7 @@ public class EmbeddingClient {
     @Value("${embedding.api.model}")
     private String modelId;
 
-    @Value("${embedding.api.batch-size:100}")
+    @Value("${embedding.api.batch-size:10}")
     private int batchSize;
 
     @Value("${embedding.api.dimension:2048}")

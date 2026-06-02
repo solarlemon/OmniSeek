@@ -118,6 +118,7 @@ embedding:
     key: sk-b9b0ecee96f14bf7b5c880231e87e1ae   # 填入通义千问API key
     model: text-embedding-v4
     dimension: 2048  # 指定向量维度
+    batch-size: 10  # DashScope API 限制最大批量为 10
 
 ai:
   prompt:

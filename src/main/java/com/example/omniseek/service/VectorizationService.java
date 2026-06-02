@@ -65,7 +65,7 @@ public class VectorizationService {
                             chunks.get(i).getChunkId(),
                             chunks.get(i).getContent(), // 保存原始文本内容
                             vectors.get(i),
-                            "deepseek-embed", // 更新为 DeepSeek 的模型版本
+                            "text-embedding-v4", // 更新为 DeepSeek 的模型版本
                             userId,
                             orgTag,
                             isPublic))
