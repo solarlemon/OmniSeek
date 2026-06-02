@@ -85,27 +85,26 @@ public class HybridSearchService {
                 logger.warn("向量生成失败，仅使用文本匹配进行搜索");
                 return textOnlySearchWithPermission(query, userDbId, userEffectiveTags, topK);
             }
-            logger.debug("向量生成成功，开始执行混合搜索 KNN");
+            logger.info("向量生成成功，开始执行混合搜索（手动 RRF 融合）");
 
-            SearchResponse<EsDocument> response = esClient.search(s -> {
+            // 手动实现 RRF：分别执行 KNN 搜索和 BM25 搜索，然后在应用层融合结果
+            int recallK = topK * 30; // 召回窗口
+            final int rrfK = 60; // RRF 平滑参数
+
+            // 1. 执行 KNN 向量搜索
+            logger.debug("执行 KNN 向量搜索...");
+            SearchResponse<EsDocument> knnResponse = esClient.search(s -> {
                 s.index("knowledge_base");
-                // 语义相似度 KNN 召回
-                int recallK = topK * 30; // KNN 召回窗口
                 s.knn(kn -> kn
                         .field("vector")
                         .queryVector(queryVector)
                         .k(recallK)
                         .numCandidates(recallK));
-                // 必须命中关键词 + 权限过滤
                 s.query(q -> q.bool(b -> b
-                        // 下面这行就是将查询的文本字符拆解为关键词并进行匹配
                         .must(mst -> mst.match(m -> m.field("textContent").query(query)))
                         .filter(f -> f.bool(bf -> bf
-                                // 条件1: 用户可访问自己的文档
                                 .should(s1 -> s1.term(t -> t.field("userId").value(userDbId)))
-                                // 条件2: 公开文档
                                 .should(s2 -> s2.term(t -> t.field("public").value(true)))
-                                // 条件3: 组织标签
                                 .should(s3 -> {
                                     if (userEffectiveTags.isEmpty()) {
                                         return s3.matchNone(mn -> mn);
@@ -119,41 +118,98 @@ public class HybridSearchService {
                                         });
                                     }
                                 })))));
-
-                // 第二阶段 BM25 rescore，0.2*KNN 分 + 1.0*BM25 分
-                // KNN 得分一般是 [0,1]，BM25 得分是 [0,+∞) 通常是几十，所以需要调整权重
-                s.rescore(r -> r
-                        .windowSize(recallK)
-                        .query(rq -> rq
-                                .queryWeight(0.2d)
-                                .rescoreQueryWeight(1.0d)
-                                .query(rqq -> rqq.match(m -> m
-                                        .field("textContent")
-                                        .query(query)
-                                        .operator(Operator.And)))));
-
-                s.size(topK);
+                s.size(recallK);
                 return s;
             }, EsDocument.class);
 
-            logger.debug("Elasticsearch查询执行完成，命中数量: {}, 最大分数: {}",
-                    response.hits().total().value(), response.hits().maxScore());
+            // 2. 执行 BM25 文本搜索
+            logger.debug("执行 BM25 文本搜索...");
+            SearchResponse<EsDocument> bm25Response = esClient.search(s -> {
+                s.index("knowledge_base");
+                s.query(q -> q.bool(b -> b
+                        .must(mst -> mst.match(m -> m.field("textContent").query(query)))
+                        .filter(f -> f.bool(bf -> bf
+                                .should(s1 -> s1.term(t -> t.field("userId").value(userDbId)))
+                                .should(s2 -> s2.term(t -> t.field("public").value(true)))
+                                .should(s3 -> {
+                                    if (userEffectiveTags.isEmpty()) {
+                                        return s3.matchNone(mn -> mn);
+                                    } else if (userEffectiveTags.size() == 1) {
+                                        return s3.term(t -> t.field("orgTag").value(userEffectiveTags.get(0)));
+                                    } else {
+                                        return s3.bool(inner -> {
+                                            userEffectiveTags.forEach(tag -> inner
+                                                    .should(sh2 -> sh2.term(t -> t.field("orgTag").value(tag))));
+                                            return inner;
+                                        });
+                                    }
+                                })))));
+                s.size(recallK);
+                return s;
+            }, EsDocument.class);
 
-            List<SearchResult> results = response.hits().hits().stream()
-                    .map(hit -> {
-                        assert hit.source() != null;
-                        logger.debug("搜索结果 - 文件: {}, 块: {}, 分数: {}, 内容: {}",
-                                hit.source().getFileMd5(), hit.source().getChunkId(), hit.score(),
-                                hit.source().getTextContent().substring(0,
-                                        Math.min(50, hit.source().getTextContent().length())));
-                        return new SearchResult(
+            // 3. 手动实现 RRF 融合
+            logger.debug("开始 RRF 融合 KNN 和 BM25 结果...");
+            java.util.Map<String, Double> rrfScores = new java.util.HashMap<>();
+            java.util.Map<String, SearchResult> documentMap = new java.util.HashMap<>();
+
+            // 处理 KNN 结果
+            int rank = 1;
+            for (co.elastic.clients.elasticsearch.core.search.Hit<EsDocument> hit : knnResponse.hits().hits()) {
+                if (hit.source() != null) {
+                    String docId = hit.source().getFileMd5() + "_" + hit.source().getChunkId();
+                    double rrfScore = 1.0 / (rrfK + rank);
+                    rrfScores.merge(docId, rrfScore, Double::sum);
+
+                    if (!documentMap.containsKey(docId)) {
+                        documentMap.put(docId, new SearchResult(
                                 hit.source().getFileMd5(),
                                 hit.source().getChunkId(),
                                 hit.source().getTextContent(),
                                 hit.score(),
                                 hit.source().getUserId(),
                                 hit.source().getOrgTag(),
-                                hit.source().isPublic());
+                                hit.source().isPublic()));
+                    }
+                    rank++;
+                }
+            }
+
+            // 处理 BM25 结果
+            rank = 1;
+            for (co.elastic.clients.elasticsearch.core.search.Hit<EsDocument> hit : bm25Response.hits().hits()) {
+                if (hit.source() != null) {
+                    String docId = hit.source().getFileMd5() + "_" + hit.source().getChunkId();
+                    double rrfScore = 1.0 / (rrfK + rank);
+                    rrfScores.merge(docId, rrfScore, Double::sum);
+
+                    if (!documentMap.containsKey(docId)) {
+                        documentMap.put(docId, new SearchResult(
+                                hit.source().getFileMd5(),
+                                hit.source().getChunkId(),
+                                hit.source().getTextContent(),
+                                hit.score(),
+                                hit.source().getUserId(),
+                                hit.source().getOrgTag(),
+                                hit.source().isPublic()));
+                    }
+                    rank++;
+                }
+            }
+
+            // 4. 按 RRF 分数排序，取 topK
+            List<SearchResult> results = rrfScores.entrySet().stream()
+                    .sorted((e1, e2) -> Double.compare(e2.getValue(), e1.getValue()))
+                    .limit(topK)
+                    .map(entry -> {
+                        SearchResult result = documentMap.get(entry.getKey());
+                        // 更新分数为 RRF 分数
+                        result.setScore(entry.getValue());
+                        logger.debug("RRF 结果 - 文件: {}, 块: {}, RRF 分数: {}, 内容: {}",
+                                result.getFileMd5(), result.getChunkId(), result.getScore(),
+                                result.getTextContent().substring(0,
+                                        Math.min(50, result.getTextContent().length())));
+                        return result;
                     })
                     .toList();
 
