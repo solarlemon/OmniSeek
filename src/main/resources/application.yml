@@ -160,6 +160,23 @@ ai:
       假设性回答：
     temperature: 0.2
     max-tokens: 500
+  intent:
+    prompt-template:
+      你是一个意图分类助手。请根据用户的问题，判断其意图属于以下哪一类：
+            - KNOWLEDGE_BASE：询问内部知识、文档、产品信息、技术规范等。
+            - WEB_SEARCH：询问实时新闻、天气、股票、外部事件、需要最新网络信息的问题。
+            - CALCULATOR：数学计算、单位转换、公式求解等。
+            - DIRECT_ANSWER：打招呼、感谢、闲聊、或无需检索即可直接回答的简单事实（如“今天星期几”）。
+
+            只输出一个类别名称，不要输出任何解释。
+
+            用户问题：%s
+
+            意图类别：
+    llm-enabled: true                     # 是否启用 LLM 辅助
+    llm-confidence-threshold: 0.7         # 规则置信度阈值，低于该值则调用 LLM
+    llm:
+      timeout-seconds: 5                  # LLM 调用超时
   generation:
     temperature: 0.3
     max-tokens: 2000
