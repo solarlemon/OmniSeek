@@ -112,10 +112,12 @@ deepseek:
 #    url: https://api.siliconflow.cn/v1/chat/completions
 #    model: deepseek-ai/DeepSeek-R1
 #    key: sk-tftrzvvzrpdnnranijycrmrhfvtxpiakrpeancwhpdkhjece
+
 rerank:
-  api: https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank
-  model: qwen3-rerank
-  key: sk-b9b0ecee96f14bf7b5c880231e87e1ae
+  api:
+    url: https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank
+    model: qwen3-rerank
+    key: sk-b9b0ecee96f14bf7b5c880231e87e1ae
 
 embedding:
   api:
@@ -147,6 +149,17 @@ ai:
     ref-start: "<<REF>>"
     ref-end: "<<END>>"
     no-result-text: "（本轮无检索结果）"
+  hyde:
+    prompt-template:
+      你是一位专业的助手。请根据用户的问题，撰写一份详细、专业的假设性回答。
+      这份回答不需要完全准确，但必须包含与问题高度相关的专业术语和概念。
+      请用流畅的段落形式输出，篇幅控制在50个词左右。
+
+      问题：%s
+
+      假设性回答：
+    temperature: 0.2
+    max-tokens: 500
   generation:
     temperature: 0.3
     max-tokens: 2000

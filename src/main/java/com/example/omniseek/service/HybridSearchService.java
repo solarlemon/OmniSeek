@@ -59,6 +59,9 @@ public class HybridSearchService {
     @Autowired
     private ChromaService chromaService;
 
+    @Autowired
+    private QueryRewriterService queryRewriterService;
+
     /**
      * 使用文本匹配和向量相似度进行混合搜索，支持权限过滤
      * 该方法确保用户只能搜索其有权限访问的文档（自己的文档、公开文档、所属组织的文档）
@@ -80,18 +83,20 @@ public class HybridSearchService {
             String userDbId = getUserDbId(userId);
             logger.debug("用户 {} 的数据库ID: {}", userId, userDbId);
 
-            // TODO: 实现查询改写以及意图识别（或者HyDE (Hypothetical Document Embeddings)）
+            // TODO：实现查询改写以及意图识别
             // 多轮对话中，根据用户之前的查询历史，对当前查询进行改写，提高搜索效率
             // 判断用户是在“查知识”、“闲聊”还是“要求执行操作”。如果是闲聊，可以直接跳过 RAG 检索，节省资源。
+
             // HyDE：先让大模型生成一个伪答案，再用伪答案去搜知识库（这在处理“问题与答案表达差异大”时非常有效）
+            String hypotheticalAnswer = queryRewriterService.generateHypotheticalAnswerBlocking(query);
 
             // 根据查询的文本字符生成查询向量
-            final List<Float> queryVector = embedToVectorList(query);
+            final List<Float> queryVector = embedToVectorList(hypotheticalAnswer);
 
             // 如果向量生成失败，仅使用文本匹配
             if (queryVector == null) {
                 logger.warn("向量生成失败，仅使用文本匹配进行搜索");
-                return textOnlySearchWithPermission(query, userDbId, userEffectiveTags, topK);
+                return textOnlySearchWithPermission(hypotheticalAnswer, userDbId, userEffectiveTags, topK);
             }
             logger.info("向量生成成功，开始执行混合搜索（Chroma + ES + RRF + Qwen3-Rerank）");
 
@@ -110,7 +115,7 @@ public class HybridSearchService {
             SearchResponse<EsDocument> bm25Response = esClient.search(s -> {
                 s.index("knowledge_base");
                 s.query(q -> q.bool(b -> b
-                        .must(mst -> mst.match(m -> m.field("textContent").query(query)))
+                        .must(mst -> mst.match(m -> m.field("textContent").query(hypotheticalAnswer)))
                         .filter(f -> f.bool(bf -> bf
                                 .should(s1 -> s1.term(t -> t.field("userId").value(userDbId)))
                                 .should(s2 -> s2.term(t -> t.field("public").value(true)))
@@ -192,7 +197,7 @@ public class HybridSearchService {
                     .toList();
 
             // 5. Qwen3-Rerank 精排
-            List<SearchResult> finalResults = qwenRerankService.rerank(query, rrfResults, topK);
+            List<SearchResult> finalResults = qwenRerankService.rerank(hypotheticalAnswer, rrfResults, topK);
 
             // 6. 设置最终排名 1,2,3...
             AtomicInteger currentRank = new AtomicInteger(1);
