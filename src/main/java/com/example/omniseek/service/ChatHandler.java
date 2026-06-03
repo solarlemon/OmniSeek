@@ -3,8 +3,7 @@ package com.example.omniseek.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.example.omniseek.client.DeepSeekClient;
-import com.example.omniseek.entity.SearchResult;
+import com.example.omniseek.router.RouteManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -32,8 +31,7 @@ public class ChatHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(ChatHandler.class);
     private final RedisTemplate<String, String> redisTemplate;
-    private final HybridSearchService searchService;
-    private final DeepSeekClient deepSeekClient;
+    private final RouteManager routeManager;
     private final ObjectMapper objectMapper;
 
     // 用于存储每个会话的完整响应
@@ -44,17 +42,15 @@ public class ChatHandler {
     private final Map<String, Boolean> stopFlags = new ConcurrentHashMap<>();
 
     public ChatHandler(RedisTemplate<String, String> redisTemplate,
-            HybridSearchService searchService,
-            DeepSeekClient deepSeekClient) {
+            RouteManager routeManager) {
         this.redisTemplate = redisTemplate;
-        this.searchService = searchService;
-        this.deepSeekClient = deepSeekClient;
+        this.routeManager = routeManager;
         this.objectMapper = new ObjectMapper();
     }
 
     public void processMessage(String userId, String userMessage, WebSocketSession session) {
         /*
-         * 处理用户消息，包括获取或创建会话、执行搜索、调用 DeepSeek API 等
+         * 处理用户消息，通过路由系统选择合适的处理方式
          */
         logger.info("开始处理消息，用户ID: {}, 会话ID: {}", userId, session.getId());
         try {
@@ -72,19 +68,8 @@ public class ChatHandler {
             List<Map<String, String>> history = getConversationHistory(conversationId);
             logger.debug("获取到 {} 条历史对话", history.size());
 
-            // 3. 执行带权限过滤的混合知识搜索
-            List<SearchResult> searchResults = searchService.searchWithPermission(userMessage, userId, 5);
-            logger.debug("搜索结果数量: {}", searchResults.size());
-
-            // 4. 通过搜索到的知识结果构建上下文（含文件名），如果记录长度大于300，则截断为300
-            String context = buildContext(searchResults);
-
-            // 5. 调用 DeepSeek API 并处理流式响应
-            logger.info("调用DeepSeek API生成回复");
-            //  streamResponse中包含System Message （系统指令/人设）、History Messages （历史对话记录）、User Message （当前提问）三部分
-            // SSE数据解析：处理大模型流式响应块，提取内容并传递给回调函数
-            deepSeekClient.streamResponse(userMessage, context, history,
-                    // 当大模型生成一部分文字（Chunk）时，回调函数会立即触发，用于累积响应内容
+            // 3. 通过路由系统处理请求
+            routeManager.route(userId, userMessage, history, session,
                     chunk -> {
                         // 累积响应内容
                         StringBuilder responseBuilder = responseBuilders.get(session.getId());
@@ -105,70 +90,56 @@ public class ChatHandler {
                         responseFutures.remove(session.getId());
                     });
 
-            // 6. 启动一个后台任务检查并标记响应完成
+            // 4. 启动一个后台任务检查并标记响应完成
             new Thread(() -> {
                 try {
-                    // 等待最多30秒，给API足够的响应时间
-                    Thread.sleep(3000); // 先等待3秒钟，让API有时间开始响应
+                    // 等待最多30秒，给处理足够的响应时间
+                    Thread.sleep(3000);
 
                     // 获取当前累积的响应内容
                     StringBuilder responseBuilder = responseBuilders.get(session.getId());
 
-                    // 如果响应构建器存在并且已有内容，认为响应已完成
                     if (responseBuilder != null) {
                         // 记录最后2秒的响应变化，检测是否停止增长
                         String lastResponse = responseBuilder.toString();
                         int lastLength = lastResponse.length();
 
-                        Thread.sleep(2000); // 再等待2秒
+                        Thread.sleep(2000);
 
-                        // 再次检查是否有新内容
                         if (responseBuilder.length() == lastLength) {
                             // 没有新内容，可以认为响应已完成
                             responseFuture.complete(responseBuilder.toString());
-                            logger.info("DeepSeek响应已完成，长度: {}", responseBuilder.length());
+                            logger.info("响应已完成，长度: {}", responseBuilder.length());
 
-                            // 发送响应完成通知
                             sendCompletionNotification(session);
 
-                            // 更新对话历史
                             String completeResponse = responseBuilder.toString();
                             updateConversationHistory(conversationId, userMessage, completeResponse);
 
-                            // 输出对话存储信息以便调试
                             String redisKey = "user:" + userId + ":current_conversation";
                             logger.info("对话存储信息 - Redis键: {}, 值: {}", redisKey, conversationId);
 
-                            // 清理会话响应构建器
                             responseBuilders.remove(session.getId());
                             responseFutures.remove(session.getId());
                             logger.info("消息处理完成，用户ID: {}", userId);
                         } else {
-                            // 仍有新内容，继续等待
                             logger.debug("响应仍在继续，等待完成...");
-                            // 再等待最多25秒
                             for (int i = 0; i < 5; i++) {
                                 Thread.sleep(5000);
                                 if (responseBuilder != null) {
                                     lastLength = responseBuilder.length();
-                                    // 再次检查2秒内是否有新内容
                                     Thread.sleep(2000);
                                     if (responseBuilder.length() == lastLength) {
-                                        // 没有新内容，可以认为响应已完成
                                         responseFuture.complete(responseBuilder.toString());
 
-                                        // 发送响应完成通知
                                         sendCompletionNotification(session);
 
-                                        // 更新对话历史
                                         String completeResponse = responseBuilder.toString();
                                         updateConversationHistory(conversationId, userMessage, completeResponse);
 
-                                        // 输出对话存储信息以便调试
                                         String redisKey = "user:" + userId + ":current_conversation";
                                         logger.info("对话存储信息 - Redis键: {}, 值: {}", redisKey, conversationId);
 
-                                        // 清理会话响应构建器
                                         responseBuilders.remove(session.getId());
                                         responseFutures.remove(session.getId());
                                         logger.info("消息处理完成，用户ID: {}", userId);
@@ -177,22 +148,17 @@ public class ChatHandler {
                                 }
                             }
 
-                            // 如果经过多次检查仍未完成，强制完成
                             if (!responseFuture.isDone()) {
                                 responseFuture.complete(responseBuilder.toString());
 
-                                // 发送响应完成通知
                                 sendCompletionNotification(session);
 
-                                // 更新对话历史
                                 String completeResponse = responseBuilder.toString();
                                 updateConversationHistory(conversationId, userMessage, completeResponse);
 
-                                // 输出对话存储信息以便调试
                                 String redisKey = "user:" + userId + ":current_conversation";
                                 logger.info("对话存储信息 - Redis键: {}, 值: {}", redisKey, conversationId);
 
-                                // 清理会话响应构建器
                                 responseBuilders.remove(session.getId());
                                 responseFutures.remove(session.getId());
                                 logger.info("消息处理强制完成，用户ID: {}", userId);
@@ -202,14 +168,12 @@ public class ChatHandler {
                         logger.warn("响应构建器为空，可能出现了错误，会话ID: {}", session.getId());
                         RuntimeException exception = new RuntimeException("响应构建器为空");
                         responseFuture.completeExceptionally(exception);
-                        // 发送错误消息
                         handleError(session, exception);
                     }
                 } catch (Exception e) {
                     logger.error("检查响应完成时出错: {}", e.getMessage(), e);
                     responseFuture.completeExceptionally(e);
 
-                    // 清理会话响应构建器
                     responseBuilders.remove(session.getId());
                     responseFutures.remove(session.getId());
                 }
@@ -218,9 +182,7 @@ public class ChatHandler {
         } catch (Exception e) {
             logger.error("处理消息错误: {}", e.getMessage(), e);
             handleError(session, e);
-            // 清理会话响应构建器
             responseBuilders.remove(session.getId());
-            // 清理响应future
             CompletableFuture<String> future = responseFutures.remove(session.getId());
             if (future != null && !future.isDone()) {
                 future.completeExceptionally(e);
@@ -298,26 +260,6 @@ public class ChatHandler {
         } catch (JsonProcessingException e) {
             logger.error("序列化对话历史出错: {}, 会话ID: {}", e.getMessage(), conversationId, e);
         }
-    }
-
-    private String buildContext(List<SearchResult> searchResults) {
-        if (searchResults == null || searchResults.isEmpty()) {
-            // 返回空字符串，让 DeepSeekClient 按"无检索结果"逻辑处理
-            return "";
-        }
-
-        final int MAX_SNIPPET_LEN = 300; // 单段最长字符数，超出截断
-        StringBuilder context = new StringBuilder();
-        for (int i = 0; i < searchResults.size(); i++) {
-            SearchResult result = searchResults.get(i);
-            String snippet = result.getTextContent();
-            if (snippet.length() > MAX_SNIPPET_LEN) {
-                snippet = snippet.substring(0, MAX_SNIPPET_LEN) + "…";
-            }
-            String fileLabel = result.getFileName() != null ? result.getFileName() : "unknown";
-            context.append(String.format("[%d] (%s) %s\n", i + 1, fileLabel, snippet));
-        }
-        return context.toString();
     }
 
     private void sendResponseChunk(WebSocketSession session, String chunk) {
