@@ -93,6 +93,7 @@ logging:
   charset:
     console: UTF-8
     file: UTF-8
+  config: classpath:logback-spring.xml
 
 log4j:
   logger:
@@ -119,6 +120,16 @@ embedding:
     model: text-embedding-v4
     dimension: 2048  # 指定向量维度
     batch-size: 10  # DashScope API 限制最大批量为 10
+
+# Chroma DB 配置
+chroma:
+  url: http://192.168.1.101:8000  # Chroma 服务地址
+  collection: knowledge_base  # 集合名称
+  api-key: ""  # API 密钥（如果需要）
+  timeout:  # 针对性能较弱的设备增加超时时间
+    connect: 30  # 连接超时（秒）
+    read: 120  # 读取超时（秒）
+    write: 120  # 写入超时（秒）
 
 ai:
   prompt:
