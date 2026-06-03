@@ -21,6 +21,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -184,15 +185,20 @@ public class HybridSearchService {
                 }
             }
 
-            // 4. 按 RRF 分数排序，取 topK
+            // 4. 按 RRF 分数排序，取 topK，并设置排名 rank
+            AtomicInteger currentRank = new AtomicInteger(1); // 排名从 1 开始
             List<SearchResult> results = rrfScores.entrySet().stream()
                     .sorted((e1, e2) -> Double.compare(e2.getValue(), e1.getValue()))
                     .limit(topK)
                     .map(entry -> {
                         SearchResult result = documentMap.get(entry.getKey());
-                        // 更新分数为 RRF 分数
-                        result.setScore(entry.getValue());
-                        logger.info("RRF 结果 - 文件: {}, 块: {}, RRF 分数: {}, 内容: {}",
+
+                        double rrfScore = entry.getValue();
+                        result.setScore(rrfScore);
+                        // 设置排名 1、2、3...
+                        result.setRank(currentRank.getAndIncrement());
+                        logger.info("RRF 结果 - 排名: {}, 文件: {}, 块: {}, RRF 分数: {}, 内容: {}",
+                                result.getRank(), // 打印也加上排名
                                 result.getFileMd5(), result.getChunkId(), result.getScore(),
                                 result.getTextContent().substring(0,
                                         Math.min(50, result.getTextContent().length())));
