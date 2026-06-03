@@ -11,13 +11,13 @@ import java.util.*;
 
 @Component
 public class QwenRerankService {
-    @Value("${rerank.key}")
+    @Value("${rerank.api.key}")
     private String apiKey;
 
-    @Value("${rerank.api}")
+    @Value("${rerank.api.url}")
     private String RERANK_API_URL;
 
-    @Value("${rerank.model}")
+    @Value("${rerank.api.model}")
     private String model;
 
     private final RestTemplate restTemplate = new RestTemplate();
