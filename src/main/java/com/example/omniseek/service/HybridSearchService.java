@@ -15,7 +15,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import co.elastic.clients.elasticsearch._types.query_dsl.Operator;
 
 import java.util.Collections;
 import java.util.HashMap;
@@ -44,8 +43,6 @@ public class HybridSearchService {
     @Autowired
     private QwenRerankService qwenRerankService;
 
-    @Autowired
-    private UserService userService;
 
     @Autowired
     private UserRepository userRepository;
