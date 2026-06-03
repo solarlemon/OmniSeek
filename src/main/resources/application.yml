@@ -112,6 +112,10 @@ deepseek:
 #    url: https://api.siliconflow.cn/v1/chat/completions
 #    model: deepseek-ai/DeepSeek-R1
 #    key: sk-tftrzvvzrpdnnranijycrmrhfvtxpiakrpeancwhpdkhjece
+rerank:
+  api: https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank
+  model: qwen3-rerank
+  key: sk-b9b0ecee96f14bf7b5c880231e87e1ae
 
 embedding:
   api:
