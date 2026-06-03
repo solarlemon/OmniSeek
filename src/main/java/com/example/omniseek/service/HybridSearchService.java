@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import co.elastic.clients.elasticsearch._types.query_dsl.Operator;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Set;
@@ -39,6 +40,9 @@ public class HybridSearchService {
 
     @Autowired
     private EmbeddingClient embeddingClient;
+
+    @Autowired
+    private QwenRerankService qwenRerankService;
 
     @Autowired
     private UserService userService;
@@ -89,14 +93,12 @@ public class HybridSearchService {
                 logger.warn("向量生成失败，仅使用文本匹配进行搜索");
                 return textOnlySearchWithPermission(query, userDbId, userEffectiveTags, topK);
             }
-            logger.info("向量生成成功，开始执行混合搜索（Chroma + ES + 手动 RRF 融合）");
+            logger.info("向量生成成功，开始执行混合搜索（Chroma + ES + RRF + Qwen3-Rerank）");
 
-            // 手动实现 RRF：分别执行 Chroma 向量搜索和 ES BM25 搜索，然后在应用层融合结果
-            int recallK = topK * 30; // 召回窗口
-            final int rrfK = 60; // RRF 平滑参数
+            int recallK = topK * 30;
+            final int rrfK = 60;
 
-            // 1. 执行 Chroma 向量搜索
-            logger.debug("执行 Chroma 向量搜索...");
+            // 1. 向量搜索
             float[] queryEmbedding = new float[queryVector.size()];
             for (int i = 0; i < queryVector.size(); i++) {
                 queryEmbedding[i] = queryVector.get(i);
@@ -104,8 +106,7 @@ public class HybridSearchService {
             List<ChromaService.ChromaSearchResponse> chromaResponse = chromaService.search(
                     queryEmbedding, recallK, userDbId, userEffectiveTags);
 
-            // 2. 执行 BM25 文本搜索
-            logger.debug("执行 BM25 文本搜索...");
+            // 2. ES 文本搜索
             SearchResponse<EsDocument> bm25Response = esClient.search(s -> {
                 s.index("knowledge_base");
                 s.query(q -> q.bool(b -> b
@@ -130,10 +131,9 @@ public class HybridSearchService {
                 return s;
             }, EsDocument.class);
 
-            // 3. 手动实现 RRF 融合
-            logger.debug("开始 RRF 融合 Chroma 和 ES 结果...");
-            java.util.Map<String, Double> rrfScores = new java.util.HashMap<>();
-            java.util.Map<String, SearchResult> documentMap = new java.util.HashMap<>();
+            // 3. RRF 粗排融合
+            Map<String, Double> rrfScores = new HashMap<>();
+            Map<String, SearchResult> documentMap = new HashMap<>();
 
             // 处理 Chroma 结果
             int rank = 1;
@@ -148,9 +148,9 @@ public class HybridSearchService {
                             hit.getChunkId(),
                             hit.getTextContent(),
                             Double.valueOf(hit.getScore()),
-                            userId, // userId 会从其他来源补充
-                            null, // orgTag 会从其他来源补充
-                            false)); // isPublic 会从其他来源补充
+                            userId,
+                            null,
+                            false));
                 }
                 rank++;
             }
@@ -173,7 +173,6 @@ public class HybridSearchService {
                                 hit.source().getOrgTag(),
                                 hit.source().isPublic()));
                     } else {
-                        // 更新已有的文档信息（从 ES 获取完整的权限信息）
                         SearchResult existing = documentMap.get(docId);
                         if (existing.getUserId() == null) {
                             existing.setUserId(hit.source().getUserId());
@@ -185,33 +184,26 @@ public class HybridSearchService {
                 }
             }
 
-            // 4. 按 RRF 分数排序，取 topK，并设置排名 rank
-            AtomicInteger currentRank = new AtomicInteger(1); // 排名从 1 开始
-            List<SearchResult> results = rrfScores.entrySet().stream()
+            // 4. RRF 粗排结果（取前30条给rerank精排）
+            List<SearchResult> rrfResults = rrfScores.entrySet().stream()
                     .sorted((e1, e2) -> Double.compare(e2.getValue(), e1.getValue()))
-                    .limit(topK)
-                    .map(entry -> {
-                        SearchResult result = documentMap.get(entry.getKey());
-
-                        double rrfScore = entry.getValue();
-                        result.setScore(rrfScore);
-                        // 设置排名 1、2、3...
-                        result.setRank(currentRank.getAndIncrement());
-                        logger.info("RRF 结果 - 排名: {}, 文件: {}, 块: {}, RRF 分数: {}, 内容: {}",
-                                result.getRank(), // 打印也加上排名
-                                result.getFileMd5(), result.getChunkId(), result.getScore(),
-                                result.getTextContent().substring(0,
-                                        Math.min(50, result.getTextContent().length())));
-                        return result;
-                    })
+                    .limit(topK * 2)
+                    .map(entry -> documentMap.get(entry.getKey()))
                     .toList();
 
-            logger.debug("返回搜索结果数量: {}", results.size());
-            attachFileNames(results); // 为搜索结果补充文件名
-            return results;
+            // 5. Qwen3-Rerank 精排
+            List<SearchResult> finalResults = qwenRerankService.rerank(query, rrfResults, topK);
+
+            // 6. 设置最终排名 1,2,3...
+            AtomicInteger currentRank = new AtomicInteger(1);
+            finalResults.forEach(item -> item.setRank(currentRank.getAndIncrement()));
+
+            logger.debug("最终返回结果数量: {}", finalResults.size());
+            attachFileNames(finalResults);
+            return finalResults;
+
         } catch (Exception e) {
             logger.error("带权限的搜索失败", e);
-            // 发生异常时尝试使用纯文本搜索作为后备方案
             try {
                 logger.info("尝试使用纯文本搜索作为后备方案");
                 return textOnlySearchWithPermission(query, getUserDbId(userId), getUserEffectiveOrgTags(userId), topK);
