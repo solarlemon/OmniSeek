@@ -1,0 +1,12 @@
+{
+    "name": "knowledge_base",
+    "metadata": {
+        "description": "OmniSeek Knowledge Base",
+        "version": "1.0",
+        "embeddingDimension": 2048,
+        "similarity": "cosine"
+    },
+    "config": {
+        "hnsw:space": "cosine"
+    }
+}

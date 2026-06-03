@@ -51,6 +51,9 @@ public class HybridSearchService {
     @Autowired
     private FileUploadRepository fileUploadRepository;
 
+    @Autowired
+    private ChromaService chromaService;
+
     /**
      * 使用文本匹配和向量相似度进行混合搜索，支持权限过滤
      * 该方法确保用户只能搜索其有权限访问的文档（自己的文档、公开文档、所属组织的文档）
@@ -85,42 +88,20 @@ public class HybridSearchService {
                 logger.warn("向量生成失败，仅使用文本匹配进行搜索");
                 return textOnlySearchWithPermission(query, userDbId, userEffectiveTags, topK);
             }
-            logger.info("向量生成成功，开始执行混合搜索（手动 RRF 融合）");
+            logger.info("向量生成成功，开始执行混合搜索（Chroma + ES + 手动 RRF 融合）");
 
-            // 手动实现 RRF：分别执行 KNN 搜索和 BM25 搜索，然后在应用层融合结果
+            // 手动实现 RRF：分别执行 Chroma 向量搜索和 ES BM25 搜索，然后在应用层融合结果
             int recallK = topK * 30; // 召回窗口
             final int rrfK = 60; // RRF 平滑参数
 
-            // 1. 执行 KNN 向量搜索
-            logger.debug("执行 KNN 向量搜索...");
-            SearchResponse<EsDocument> knnResponse = esClient.search(s -> {
-                s.index("knowledge_base");
-                s.knn(kn -> kn
-                        .field("vector")
-                        .queryVector(queryVector)
-                        .k(recallK)
-                        .numCandidates(recallK));
-                s.query(q -> q.bool(b -> b
-                        .must(mst -> mst.match(m -> m.field("textContent").query(query)))
-                        .filter(f -> f.bool(bf -> bf
-                                .should(s1 -> s1.term(t -> t.field("userId").value(userDbId)))
-                                .should(s2 -> s2.term(t -> t.field("public").value(true)))
-                                .should(s3 -> {
-                                    if (userEffectiveTags.isEmpty()) {
-                                        return s3.matchNone(mn -> mn);
-                                    } else if (userEffectiveTags.size() == 1) {
-                                        return s3.term(t -> t.field("orgTag").value(userEffectiveTags.get(0)));
-                                    } else {
-                                        return s3.bool(inner -> {
-                                            userEffectiveTags.forEach(tag -> inner
-                                                    .should(sh2 -> sh2.term(t -> t.field("orgTag").value(tag))));
-                                            return inner;
-                                        });
-                                    }
-                                })))));
-                s.size(recallK);
-                return s;
-            }, EsDocument.class);
+            // 1. 执行 Chroma 向量搜索
+            logger.debug("执行 Chroma 向量搜索...");
+            float[] queryEmbedding = new float[queryVector.size()];
+            for (int i = 0; i < queryVector.size(); i++) {
+                queryEmbedding[i] = queryVector.get(i);
+            }
+            List<ChromaService.ChromaSearchResponse> chromaResponse = chromaService.search(
+                    queryEmbedding, recallK, userDbId, userEffectiveTags);
 
             // 2. 执行 BM25 文本搜索
             logger.debug("执行 BM25 文本搜索...");
@@ -149,30 +130,28 @@ public class HybridSearchService {
             }, EsDocument.class);
 
             // 3. 手动实现 RRF 融合
-            logger.debug("开始 RRF 融合 KNN 和 BM25 结果...");
+            logger.debug("开始 RRF 融合 Chroma 和 ES 结果...");
             java.util.Map<String, Double> rrfScores = new java.util.HashMap<>();
             java.util.Map<String, SearchResult> documentMap = new java.util.HashMap<>();
 
-            // 处理 KNN 结果
+            // 处理 Chroma 结果
             int rank = 1;
-            for (co.elastic.clients.elasticsearch.core.search.Hit<EsDocument> hit : knnResponse.hits().hits()) {
-                if (hit.source() != null) {
-                    String docId = hit.source().getFileMd5() + "_" + hit.source().getChunkId();
-                    double rrfScore = 1.0 / (rrfK + rank);
-                    rrfScores.merge(docId, rrfScore, Double::sum);
+            for (ChromaService.ChromaSearchResponse hit : chromaResponse) {
+                String docId = hit.getFileMd5() + "_" + hit.getChunkId();
+                double rrfScore = 1.0 / (rrfK + rank);
+                rrfScores.merge(docId, rrfScore, Double::sum);
 
-                    if (!documentMap.containsKey(docId)) {
-                        documentMap.put(docId, new SearchResult(
-                                hit.source().getFileMd5(),
-                                hit.source().getChunkId(),
-                                hit.source().getTextContent(),
-                                hit.score(),
-                                hit.source().getUserId(),
-                                hit.source().getOrgTag(),
-                                hit.source().isPublic()));
-                    }
-                    rank++;
+                if (!documentMap.containsKey(docId)) {
+                    documentMap.put(docId, new SearchResult(
+                            hit.getFileMd5(),
+                            hit.getChunkId(),
+                            hit.getTextContent(),
+                            Double.valueOf(hit.getScore()),
+                            userId, // userId 会从其他来源补充
+                            null, // orgTag 会从其他来源补充
+                            false)); // isPublic 会从其他来源补充
                 }
+                rank++;
             }
 
             // 处理 BM25 结果
@@ -192,6 +171,14 @@ public class HybridSearchService {
                                 hit.source().getUserId(),
                                 hit.source().getOrgTag(),
                                 hit.source().isPublic()));
+                    } else {
+                        // 更新已有的文档信息（从 ES 获取完整的权限信息）
+                        SearchResult existing = documentMap.get(docId);
+                        if (existing.getUserId() == null) {
+                            existing.setUserId(hit.source().getUserId());
+                            existing.setOrgTag(hit.source().getOrgTag());
+                            existing.setIsPublic(hit.source().isPublic());
+                        }
                     }
                     rank++;
                 }
@@ -205,7 +192,7 @@ public class HybridSearchService {
                         SearchResult result = documentMap.get(entry.getKey());
                         // 更新分数为 RRF 分数
                         result.setScore(entry.getValue());
-                        logger.debug("RRF 结果 - 文件: {}, 块: {}, RRF 分数: {}, 内容: {}",
+                        logger.info("RRF 结果 - 文件: {}, 块: {}, RRF 分数: {}, 内容: {}",
                                 result.getFileMd5(), result.getChunkId(), result.getScore(),
                                 result.getTextContent().substring(0,
                                         Math.min(50, result.getTextContent().length())));
@@ -329,43 +316,88 @@ public class HybridSearchService {
                 logger.warn("向量生成失败，仅使用文本匹配进行搜索");
                 return textOnlySearch(query, topK);
             }
+            logger.info("向量生成成功，开始执行混合搜索（Chroma + ES + 手动 RRF 融合）");
 
-            SearchResponse<EsDocument> response = esClient.search(s -> {
+            // 手动实现 RRF：分别执行 Chroma 向量搜索和 ES BM25 搜索，然后在应用层融合结果
+            int recallK = topK * 30; // 召回窗口
+            final int rrfK = 60; // RRF 平滑参数
+
+            // 1. 执行 Chroma 向量搜索
+            logger.debug("执行 Chroma 向量搜索...");
+            float[] queryEmbedding = new float[queryVector.size()];
+            for (int i = 0; i < queryVector.size(); i++) {
+                queryEmbedding[i] = queryVector.get(i);
+            }
+            List<ChromaService.ChromaSearchResponse> chromaResults = chromaService.search(
+                    queryEmbedding, recallK, null, null); // 空 userId 和 orgTags 表示只搜公开文档
+
+            // 2. 执行 BM25 文本搜索
+            logger.debug("执行 BM25 文本搜索...");
+            SearchResponse<EsDocument> bm25Response = esClient.search(s -> {
                 s.index("knowledge_base");
-                int recallK = topK * 30;
-                s.knn(kn -> kn
-                        .field("vector")
-                        .queryVector(queryVector)
-                        .k(recallK)
-                        .numCandidates(recallK));
-
-                // 过滤仅保留包含关键词的文本
-                s.query(q -> q.match(m -> m.field("textContent").query(query)));
-
-                // rescore BM25
-                s.rescore(r -> r
-                        .windowSize(recallK)
-                        .query(rq -> rq
-                                .queryWeight(0.2d)
-                                .rescoreQueryWeight(1.0d)
-                                .query(rqq -> rqq.match(m -> m
-                                        .field("textContent")
-                                        .query(query)
-                                        .operator(Operator.And)))));
-                s.size(topK);
+                s.query(q -> q.bool(b -> b
+                        .must(mst -> mst.match(m -> m.field("textContent").query(query)))
+                        .filter(f -> f.term(t -> t.field("public").value(true))))); // 只搜公开文档
+                s.size(recallK);
                 return s;
             }, EsDocument.class);
 
-            return response.hits().hits().stream()
-                    .map(hit -> {
-                        assert hit.source() != null;
-                        return new SearchResult(
+            // 3. 手动实现 RRF 融合
+            logger.debug("开始 RRF 融合 Chroma 和 ES 结果...");
+            java.util.Map<String, Double> rrfScores = new java.util.HashMap<>();
+            java.util.Map<String, SearchResult> documentMap = new java.util.HashMap<>();
+
+            // 处理 Chroma 结果
+            int rank = 1;
+            for (ChromaService.ChromaSearchResponse hit : chromaResults) {
+                String docId = hit.getFileMd5() + "_" + hit.getChunkId();
+                double rrfScore = 1.0 / (rrfK + rank);
+                rrfScores.merge(docId, rrfScore, Double::sum);
+
+                if (!documentMap.containsKey(docId)) {
+                    documentMap.put(docId, new SearchResult(
+                            hit.getFileMd5(),
+                            hit.getChunkId(),
+                            hit.getTextContent(),
+                            Double.valueOf(hit.getScore())));
+                }
+                rank++;
+            }
+
+            // 处理 BM25 结果
+            rank = 1;
+            for (co.elastic.clients.elasticsearch.core.search.Hit<EsDocument> hit : bm25Response.hits().hits()) {
+                if (hit.source() != null) {
+                    String docId = hit.source().getFileMd5() + "_" + hit.source().getChunkId();
+                    double rrfScore = 1.0 / (rrfK + rank);
+                    rrfScores.merge(docId, rrfScore, Double::sum);
+
+                    if (!documentMap.containsKey(docId)) {
+                        documentMap.put(docId, new SearchResult(
                                 hit.source().getFileMd5(),
                                 hit.source().getChunkId(),
                                 hit.source().getTextContent(),
-                                hit.score());
+                                hit.score()));
+                    }
+                    rank++;
+                }
+            }
+
+            // 4. 按 RRF 分数排序，取 topK
+            List<SearchResult> results = rrfScores.entrySet().stream()
+                    .sorted((e1, e2) -> Double.compare(e2.getValue(), e1.getValue()))
+                    .limit(topK)
+                    .map(entry -> {
+                        SearchResult result = documentMap.get(entry.getKey());
+                        // 更新分数为 RRF 分数
+                        result.setScore(entry.getValue());
+                        return result;
                     })
                     .toList();
+
+            logger.debug("返回搜索结果数量: {}", results.size());
+            attachFileNames(results);
+            return results;
         } catch (Exception e) {
             logger.error("搜索失败", e);
             // 发生异常时尝试使用纯文本搜索作为后备方案

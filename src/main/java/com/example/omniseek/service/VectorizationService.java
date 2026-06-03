@@ -2,6 +2,7 @@ package com.example.omniseek.service;
 
 import com.example.omniseek.client.EmbeddingClient;
 import com.example.omniseek.model.DocumentVector;
+import com.example.omniseek.entity.ChromaDocument;
 import com.example.omniseek.entity.EsDocument;
 import com.example.omniseek.entity.TextChunk;
 import com.example.omniseek.repository.DocumentVectorRepository;
@@ -19,87 +20,105 @@ import java.util.stream.IntStream;
 @Service
 public class VectorizationService {
 
-    private static final Logger logger = LoggerFactory.getLogger(VectorizationService.class);
+        private static final Logger logger = LoggerFactory.getLogger(VectorizationService.class);
 
-    @Autowired
-    private EmbeddingClient embeddingClient;
+        @Autowired
+        private EmbeddingClient embeddingClient;
 
-    @Autowired
-    private ElasticsearchService elasticsearchService;
+        @Autowired
+        private ElasticsearchService elasticsearchService;
 
-    @Autowired
-    private DocumentVectorRepository documentVectorRepository;
+        @Autowired
+        private ChromaService chromaService;
 
-    @Value("${embedding.api.model:text-embedding-v4}")
-    private String modelVersion;
+        @Autowired
+        private DocumentVectorRepository documentVectorRepository;
 
-    /**
-     * 执行向量化操作，并存储到 Elasticsearch
-     * 
-     * @param fileMd5  文件指纹
-     * @param userId   上传用户ID
-     * @param orgTag   组织标签
-     * @param isPublic 是否公开
-     */
-    public void vectorize(String fileMd5, String userId, String orgTag, boolean isPublic) {
-        try {
-            logger.info("开始向量化文件，fileMd5: {}, userId: {}, orgTag: {}, isPublic: {}",
-                    fileMd5, userId, orgTag, isPublic);
+        @Value("${embedding.api.model:text-embedding-v4}")
+        private String modelVersion;
 
-            // 获取文件分块内容
-            List<TextChunk> chunks = fetchTextChunks(fileMd5);
-            if (chunks == null || chunks.isEmpty()) {
-                logger.warn("未找到分块内容，fileMd5: {}", fileMd5);
-                return;
-            }
+        /**
+         * 执行向量化操作，同时存储到 Elasticsearch 和 Chroma
+         *
+         * @param fileMd5  文件指纹
+         * @param userId   上传用户ID
+         * @param orgTag   组织标签
+         * @param isPublic 是否公开
+         */
+        public void vectorize(String fileMd5, String userId, String orgTag, boolean isPublic) {
+                try {
+                        logger.info("开始向量化文件，fileMd5: {}, userId: {}, orgTag: {}, isPublic: {}",
+                                        fileMd5, userId, orgTag, isPublic);
 
-            // 提取文本内容
-            List<String> texts = chunks.stream()
-                    .map(TextChunk::getContent)
-                    .toList();
+                        // 获取文件分块内容
+                        List<TextChunk> chunks = fetchTextChunks(fileMd5);
+                        if (chunks == null || chunks.isEmpty()) {
+                                logger.warn("未找到分块内容，fileMd5: {}", fileMd5);
+                                return;
+                        }
 
-            // 调用外部模型生成向量
-            List<float[]> vectors = embeddingClient.embed(texts);
+                        // 提取文本内容
+                        List<String> texts = chunks.stream()
+                                        .map(TextChunk::getContent)
+                                        .toList();
 
-            // 构建 Elasticsearch 文档并存储
-            List<EsDocument> esDocuments = IntStream.range(0, chunks.size())
-                    .mapToObj(i -> new EsDocument(
-                            UUID.randomUUID().toString(),
-                            fileMd5,
-                            chunks.get(i).getChunkId(),
-                            chunks.get(i).getContent(), // 保存原始文本内容
-                            vectors.get(i),
-                            modelVersion,
-                            userId,
-                            orgTag,
-                            isPublic))
-                    .toList();
+                        // 调用外部模型生成向量
+                        List<float[]> vectors = embeddingClient.embed(texts);
 
-            elasticsearchService.bulkIndex(esDocuments); // 批量存储到 Elasticsearch
+                        // 构建 Elasticsearch 文档并存储（仅存储文本和权限信息，不存储向量）
+                        try {
+                                List<EsDocument> esDocuments = IntStream.range(0, chunks.size())
+                                                .mapToObj(i -> new EsDocument(
+                                                                UUID.randomUUID().toString(),
+                                                                fileMd5,
+                                                                chunks.get(i).getChunkId(),
+                                                                chunks.get(i).getContent(), // 保存原始文本内容
+                                                                userId,
+                                                                orgTag,
+                                                                isPublic))
+                                                .toList();
 
-            logger.info("向量化完成，fileMd5: {}", fileMd5);
-        } catch (Exception e) {
-            logger.error("向量化失败，fileMd5: {}", fileMd5, e);
-            throw new RuntimeException("向量化失败", e);
+                                elasticsearchService.bulkIndex(esDocuments); // 批量存储到 Elasticsearch
+
+                                // 构建 Chroma 文档并存储
+                                List<ChromaDocument> chromaDocuments = IntStream.range(0, chunks.size())
+                                                .mapToObj(i -> new ChromaDocument(
+                                                                UUID.randomUUID().toString(),
+                                                                vectors.get(i),
+                                                                fileMd5,
+                                                                chunks.get(i).getChunkId(),
+                                                                chunks.get(i).getContent(),
+                                                                userId,
+                                                                orgTag,
+                                                                isPublic))
+                                                .toList();
+                                chromaService.bulkAddDocuments(chromaDocuments); // 批量存储到 Chroma
+                                logger.info("存储到ES/CHroma成功，fileMd5: {}", fileMd5);
+                        } catch (Exception e) {
+                                logger.error("存储到ES/CHroma失败，fileMd5: {}", fileMd5, e);
+                        }
+                } catch (Exception e) {
+                        logger.error("向量化失败，fileMd5: {}", fileMd5, e);
+                        throw new RuntimeException("向量化失败", e);
+                }
         }
-    }
 
-    /**
-     * 获取文件分块内容
-     * 
-     * @param fileMd5 文件指纹
-     * @return 分块内容列表
-     */
-    // 从数据库获取分块内容
-    private List<TextChunk> fetchTextChunks(String fileMd5) {
-        // 调用 Repository 查询数据
-        List<DocumentVector> vectors = documentVectorRepository.findByFileMd5(fileMd5);
+        /**
+         * 获取文件分块内容
+         * 
+         * @param fileMd5 文件指纹
+         * @return 分块内容列表
+         */
+        // 从数据库获取分块内容
+        private List<TextChunk> fetchTextChunks(String fileMd5) {
+                // 调用 Repository 查询数据
+                List<DocumentVector> vectors = documentVectorRepository.findByFileMd5(fileMd5);
 
-        // 转换为 TextChunk 列表
-        return vectors.stream()
-                .map(vector -> new TextChunk(
-                        vector.getChunkId(),
-                        vector.getTextContent()))
-                .toList();
-    }
+                // 转换为 TextChunk 列表
+                return vectors.stream()
+                                .map(vector -> new TextChunk(
+                                                vector.getChunkId(),
+                                                vector.getTextContent()))
+                                .toList();
+        }
 }
