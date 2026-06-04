@@ -137,6 +137,11 @@ chroma:
     read: 120  # 读取超时（秒）
     write: 120  # 写入超时（秒）
 
+web-search:
+  api:
+    url: https://api.tavily.com/search
+    key: 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
+
 ai:
   prompt:
     rules: |
