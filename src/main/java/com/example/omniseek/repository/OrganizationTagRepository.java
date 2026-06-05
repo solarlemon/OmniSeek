@@ -1,7 +1,8 @@
 package com.example.omniseek.repository;
 
-import com.example.omniseek.model.OrganizationTag;
 import org.springframework.data.jpa.repository.JpaRepository;
+
+import com.example.omniseek.entity.OrganizationTag;
 
 import java.util.List;
 import java.util.Optional;

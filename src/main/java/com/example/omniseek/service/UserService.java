@@ -1,8 +1,8 @@
 package com.example.omniseek.service;
 
+import com.example.omniseek.entity.OrganizationTag;
+import com.example.omniseek.entity.User;
 import com.example.omniseek.exception.CustomException;
-import com.example.omniseek.model.OrganizationTag;
-import com.example.omniseek.model.User;
 import com.example.omniseek.repository.OrganizationTagRepository;
 import com.example.omniseek.repository.UserRepository;
 import com.example.omniseek.utils.PasswordUtil;

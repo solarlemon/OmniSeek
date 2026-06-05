@@ -1,8 +1,9 @@
 package com.example.omniseek.repository;
 
+import com.example.omniseek.dto.Message;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.example.omniseek.entity.Message;
+
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Repository;
 

@@ -3,13 +3,14 @@ package com.example.omniseek.service;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import com.example.omniseek.client.EmbeddingClient;
-import com.example.omniseek.entity.EsDocument;
-import com.example.omniseek.entity.SearchResult;
-import com.example.omniseek.model.User;
+import com.example.omniseek.dto.EsDocument;
+import com.example.omniseek.dto.SearchResult;
+import com.example.omniseek.entity.FileUpload;
+import com.example.omniseek.entity.User;
 import com.example.omniseek.exception.CustomException;
 import com.example.omniseek.repository.UserRepository;
 import com.example.omniseek.repository.FileUploadRepository;
-import com.example.omniseek.model.FileUpload;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;

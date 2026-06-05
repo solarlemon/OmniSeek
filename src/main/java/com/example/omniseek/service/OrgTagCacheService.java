@@ -6,7 +6,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
-import com.example.omniseek.model.OrganizationTag;
+import com.example.omniseek.entity.OrganizationTag;
 import com.example.omniseek.repository.OrganizationTagRepository;
 
 import java.util.List;

@@ -1,6 +1,6 @@
 package com.example.omniseek.config;
 
-import com.example.omniseek.model.User;
+import com.example.omniseek.entity.User;
 import com.example.omniseek.repository.UserRepository;
 import com.example.omniseek.utils.PasswordUtil;
 import org.slf4j.Logger;

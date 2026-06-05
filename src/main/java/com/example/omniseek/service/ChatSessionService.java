@@ -1,8 +1,8 @@
 package com.example.omniseek.service;
 
+import com.example.omniseek.entity.ChatSession;
+import com.example.omniseek.entity.User;
 import com.example.omniseek.exception.CustomException;
-import com.example.omniseek.model.ChatSession;
-import com.example.omniseek.model.User;
 import com.example.omniseek.repository.ChatSessionRepository;
 import com.example.omniseek.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;

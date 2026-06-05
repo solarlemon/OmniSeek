@@ -1,6 +1,6 @@
 package com.example.omniseek.utils;
 
-import com.example.omniseek.model.User;
+import com.example.omniseek.entity.User;
 import com.example.omniseek.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

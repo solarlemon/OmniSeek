@@ -1,7 +1,7 @@
 package com.example.omniseek.service;
 
-import com.example.omniseek.model.FileUpload;
-import com.example.omniseek.model.User;
+import com.example.omniseek.entity.FileUpload;
+import com.example.omniseek.entity.User;
 import com.example.omniseek.repository.DocumentVectorRepository;
 import com.example.omniseek.repository.FileUploadRepository;
 import com.example.omniseek.repository.UserRepository;

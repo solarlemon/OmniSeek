@@ -1,8 +1,8 @@
 package com.example.omniseek.controller;
 
 import com.example.omniseek.config.KafkaConfig;
-import com.example.omniseek.model.FileProcessingTask;
-import com.example.omniseek.model.FileUpload;
+import com.example.omniseek.entity.FileProcessingTask;
+import com.example.omniseek.entity.FileUpload;
 import com.example.omniseek.repository.FileUploadRepository;
 import com.example.omniseek.service.FileTypeValidationService;
 import com.example.omniseek.service.UploadService;

@@ -1,8 +1,9 @@
 package com.example.omniseek.repository;
 
-import com.example.omniseek.model.ChatSession;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
+
+import com.example.omniseek.entity.ChatSession;
 
 import java.util.List;
 import java.util.Optional;

@@ -1,4 +1,4 @@
-package com.example.omniseek.model;
+package com.example.omniseek.entity;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;

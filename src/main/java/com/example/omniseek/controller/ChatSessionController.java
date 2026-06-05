@@ -1,6 +1,6 @@
 package com.example.omniseek.controller;
 
-import com.example.omniseek.model.ChatSession;
+import com.example.omniseek.entity.ChatSession;
 import com.example.omniseek.service.ChatSessionService;
 import com.example.omniseek.utils.JwtUtils;
 import com.example.omniseek.utils.LogUtils;

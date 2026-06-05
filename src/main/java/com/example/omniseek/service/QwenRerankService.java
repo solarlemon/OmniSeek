@@ -1,6 +1,6 @@
 package com.example.omniseek.service;
 
-import com.example.omniseek.entity.SearchResult;
+import com.example.omniseek.dto.SearchResult;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
 import org.springframework.beans.factory.annotation.Value;

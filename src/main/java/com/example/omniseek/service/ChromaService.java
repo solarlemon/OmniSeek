@@ -1,6 +1,6 @@
 package com.example.omniseek.service;
 
-import com.example.omniseek.entity.ChromaDocument;
+import com.example.omniseek.dto.ChromaDocument;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;

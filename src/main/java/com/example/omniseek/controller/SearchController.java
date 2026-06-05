@@ -1,10 +1,10 @@
 package com.example.omniseek.controller;
 
+import com.example.omniseek.dto.SearchResult;
 import com.example.omniseek.service.HybridSearchService;
 import com.example.omniseek.utils.LogUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
-import com.example.omniseek.entity.SearchResult;
 
 import java.util.List;
 import java.util.Map;
