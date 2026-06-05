@@ -88,7 +88,7 @@ logging:
     org.springframework.web: DEBUG
     org.springframework.boot.autoconfigure.web.servlet: DEBUG
     org.springframework.security: DEBUG
-    com.yizhaoqi.smartpai.service: DEBUG
+    com.example.omniseek.service: DEBUG
     io.minio: DEBUG
   charset:
     console: UTF-8
