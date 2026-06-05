@@ -172,8 +172,19 @@ declare namespace Api {
       conversationId?: string;
     }
 
+    interface ChatRequest {
+      type: 'chat';
+      text: string;
+      sessionId?: string;
+    }
+
     interface Output {
+      type?: string;
       chunk: string;
+      status?: string;
+      error?: string;
+      sessionId?: string;
+      conversationId?: string;
     }
 
     interface Conversation {
