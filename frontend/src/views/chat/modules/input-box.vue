@@ -13,12 +13,16 @@ const isSending = computed(() => {
 });
 
 const sendable = computed(
-  () => (!input.value.message && !isSending) || ['CLOSED', 'CONNECTING'].includes(wsStatus.value)
+  () => (!input.value.message && !isSending.value) || ['CLOSED', 'CONNECTING'].includes(wsStatus.value)
 );
 
 watch(wsData, val => {
   const data = JSON.parse(val);
   const assistant = list.value[list.value.length - 1];
+
+  if (data.sessionId || data.conversationId) {
+    chatStore.conversationId = data.sessionId || data.conversationId;
+  }
 
   if (data.type === 'completion' && data.status === 'finished' && assistant.status !== 'error')
     assistant.status = 'finished';
@@ -46,7 +50,7 @@ const handleSend = async () => {
     content: input.value.message,
     role: 'user'
   });
-  chatStore.wsSend(input.value.message);
+  chatStore.sendChatMessage(input.value.message);
   list.value.push({
     content: '',
     role: 'assistant',

@@ -20,6 +20,16 @@ export const useChatStore = defineStore(SetupStoreId.Chat, () => {
 
   const scrollToBottom = ref<null | (() => void)>(null);
 
+  function sendChatMessage(text: string) {
+    wsSend(
+      JSON.stringify({
+        type: 'chat',
+        text,
+        sessionId: conversationId.value || undefined
+      })
+    );
+  }
+
   return {
     input,
     conversationId,
@@ -29,6 +39,7 @@ export const useChatStore = defineStore(SetupStoreId.Chat, () => {
     wsSend,
     wsOpen,
     wsClose,
+    sendChatMessage,
     scrollToBottom
   };
 });

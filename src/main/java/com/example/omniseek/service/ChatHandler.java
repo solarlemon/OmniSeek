@@ -4,7 +4,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.example.omniseek.client.DeepSeekClient;
+import com.example.omniseek.model.ChatSession;
 import com.example.omniseek.router.RouteManager;
+import com.example.omniseek.service.ChatSessionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -30,6 +32,7 @@ public class ChatHandler {
     private final RedisTemplate<String, String> redisTemplate;
     private final RouteManager routeManager;
     private final DeepSeekClient deepSeekClient;
+    private final ChatSessionService chatSessionService;
     private final ObjectMapper objectMapper;
 
     // 滑动窗口配置
@@ -55,23 +58,37 @@ public class ChatHandler {
     public ChatHandler(RedisTemplate<String, String> redisTemplate,
             RouteManager routeManager,
             DeepSeekClient deepSeekClient,
+            ChatSessionService chatSessionService,
             Executor compactionExecutor) {
         this.redisTemplate = redisTemplate;
         this.routeManager = routeManager;
         this.deepSeekClient = deepSeekClient;
+        this.chatSessionService = chatSessionService;
         this.objectMapper = new ObjectMapper();
         this.compactionExecutor = compactionExecutor;
     }
 
     public void processMessage(String userId, String userMessage, WebSocketSession session) {
+        processMessage(userId, userMessage, session, null);
+    }
+
+    public void processMessage(String userId, String userMessage, WebSocketSession session, String conversationId) {
         /*
          * 处理用户消息，通过路由系统选择合适的处理方式
          */
-        logger.info("开始处理消息，用户ID: {}, 会话ID: {}", userId, session.getId());
+        logger.debug("开始处理消息，用户ID: {}, session ID: {}, conversationId: {}", userId, session.getId(), conversationId);
         try {
-            // 1. 获取或创建会话 ID
-            String conversationId = getOrCreateConversationId(userId);
-            logger.info("会话ID: {}, 用户ID: {}", conversationId, userId);
+            // 1. 获取会话 ID（优先使用传入的，否则创建新的）
+            String finalConversationId;
+            if (conversationId != null && !conversationId.isBlank()) {
+                finalConversationId = conversationId;
+                logger.info("使用传入的会话ID: {}, 用户ID: {}", finalConversationId, userId);
+            } else {
+                // 创建新会话并获取其 ID
+                ChatSession newSession = chatSessionService.createSession(userId);
+                finalConversationId = newSession.getSessionId();
+                logger.info("创建新会话，会话ID: {}, 用户ID: {}", finalConversationId, userId);
+            }
 
             // 为当前会话创建响应构建器
             responseBuilders.put(session.getId(), new StringBuilder());
@@ -80,12 +97,13 @@ public class ChatHandler {
             responseFutures.put(session.getId(), responseFuture);
 
             // 获取压缩后的历史（摘要 + 滑动窗口消息）
-            List<Map<String, String>> history = getCompressedHistory(conversationId);
+            List<Map<String, String>> history = getCompressedHistory(finalConversationId);
             logger.debug("获取到 {} 条历史（含摘要）", history.size());
 
             // 路由处理（流式生成）
             responseFutures.put(session.getId(), responseFuture);
 
+            String convId = finalConversationId; // 用于 lambda 中
             routeManager.route(userId, userMessage, history, session,
                     chunk -> {
                         StringBuilder builder = responseBuilders.get(session.getId());
@@ -101,7 +119,8 @@ public class ChatHandler {
                     () -> { // onComplete 回调
                         String fullResponse = responseBuilders.get(session.getId()).toString();
                         responseFuture.complete(fullResponse);
-                        saveMessagesAndCompact(conversationId, userMessage, fullResponse);
+                        saveMessagesAndCompact(convId, userMessage, fullResponse);
+                        updateSessionAfterMessage(convId, userMessage, fullResponse);
                         sendCompletionNotification(session);
                         cleanupSession(session.getId());
                     });
@@ -268,14 +287,19 @@ public class ChatHandler {
         }
     }
 
-    private String getOrCreateConversationId(String userId) {
-        String key = "user:" + userId + ":current_conversation";
-        String conversationId = redisTemplate.opsForValue().get(key);
-        if (conversationId == null) {
-            conversationId = UUID.randomUUID().toString();
-            redisTemplate.opsForValue().set(key, conversationId, Duration.ofDays(7));
+    private void updateSessionAfterMessage(String conversationId, String userMessage, String assistantResponse) {
+        try {
+            chatSessionService.incrementMessageCount(conversationId);
+
+            // 如果是第一条消息，自动设置会话标题为用户问题的前20个字符
+            ChatSession session = chatSessionService.getSession(conversationId);
+            if (session.getMessageCount() == 1) {
+                String title = userMessage.length() > 20 ? userMessage.substring(0, 20) + "..." : userMessage;
+                chatSessionService.updateSessionTitle(conversationId, title);
+            }
+        } catch (Exception e) {
+            logger.error("更新会话信息失败", e);
         }
-        return conversationId;
     }
 
     private void cleanupSession(String sessionId) {

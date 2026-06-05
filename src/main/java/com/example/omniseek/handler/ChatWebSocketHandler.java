@@ -46,7 +46,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             logger.info("接收到消息，用户ID: {}，会话ID: {}，消息长度: {}", 
                        userId, session.getId(), payload.length());
             
-            // 检查是否是JSON格式的系统指令
+            // 检查是否是JSON格式的消息
             if (payload.trim().startsWith("{")) {
                 try {
                     Map<String, Object> jsonMessage = objectMapper.readValue(payload, Map.class);
@@ -59,6 +59,18 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                         logger.info("收到有效的停止按钮指令，用户ID: {}，会话ID: {}", userId, session.getId());
                         chatHandler.stopResponse(userId, session);
                         return;
+                    }
+                    
+                    // 处理包含sessionId的聊天消息
+                    if ("chat".equals(messageType)) {
+                        String text = (String) jsonMessage.get("text");
+                        String sessionId = (String) jsonMessage.get("sessionId");
+                        
+                        if (text != null && !text.isBlank()) {
+                            logger.info("处理带会话ID的聊天消息，会话ID: {}", sessionId);
+                            chatHandler.processMessage(userId, text, session, sessionId);
+                            return;
+                        }
                     }
                     
                     // 其他JSON消息当作普通消息处理
