@@ -71,7 +71,7 @@ frontend/package-lock.json
 frontend/yarn.lock
 
 .VSCodeCounter
-frontend/*
+
 frontend/src/typings/components.d.ts
 frontend/src/typings/auto-imports.d.ts
 frontend/public/languages

@@ -1,0 +1,36 @@
+<svg width="900" height="260" viewBox="0 0 900 260" fill="none" xmlns="http://www.w3.org/2000/svg">
+
+  <defs>
+    <linearGradient id="seekGradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2563EB"></stop>
+      <stop offset="100%" stop-color="#06B6D4"></stop>
+    </linearGradient>
+  </defs>
+
+  <!-- Icon -->
+  <g transform="translate(50,40)">
+    <!-- O -->
+    <circle cx="70" cy="70" r="52" stroke="url(#seekGradient)" stroke-width="16" fill="none"></circle>
+
+    <!-- Magnifier handle -->
+    <line x1="105" y1="105" x2="145" y2="145" stroke="url(#seekGradient)" stroke-width="16" stroke-linecap="round"></line>
+
+    <!-- Center dot -->
+    <circle cx="70" cy="70" r="10" fill="#06B6D4" opacity="0.85"></circle>
+  </g>
+
+  <!-- OmniSeek -->
+  <text x="230" y="110" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="72" font-weight="700" fill="#111827">
+    Omni
+  </text>
+
+  <text x="430" y="110" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="72" font-weight="700" fill="url(#seekGradient)">
+    Seek
+  </text>
+
+  <!-- Chinese -->
+  <text x="235" y="170" font-family="Microsoft YaHei, PingFang SC, Noto Sans SC, sans-serif" font-size="34" font-weight="600" fill="#374151">
+    万象智搜
+  </text>
+
+</svg>
