@@ -38,7 +38,8 @@ public class RouteManager {
             List<Map<String, String>> history,
             WebSocketSession session,
             Consumer<String> onChunk,
-            Consumer<Throwable> onError) {
+            Consumer<Throwable> onError,
+            Runnable onComplete) {
         // 1. 识别意图
         RouteType routeType = intentRouter.route(userMessage);
         logger.info("路由决策: {} -> {}", userMessage, routeType);
@@ -51,6 +52,6 @@ public class RouteManager {
         }
 
         // 3. 处理请求
-        handler.handle(userId, userMessage, history, session, onChunk, onError);
+        handler.handle(userId, userMessage, history, session, onChunk, onError, onComplete);
     }
 }
