@@ -108,7 +108,7 @@ public class FileProcessingConsumer {
                 connection.setReadTimeout(180000); // 读取超时时间3分钟
 
                 // 添加必要的请求头
-                connection.setRequestProperty("User-Agent", "SmartPAI-FileProcessor/1.0");
+                connection.setRequestProperty("User-Agent", "OmniSeek-FileProcessor/1.0");
 
                 int responseCode = connection.getResponseCode();
                 if (responseCode == HttpURLConnection.HTTP_OK) {
