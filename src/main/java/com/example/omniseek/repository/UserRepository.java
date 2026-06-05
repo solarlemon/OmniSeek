@@ -1,7 +1,8 @@
 package com.example.omniseek.repository;
 
-import com.example.omniseek.model.User;
 import org.springframework.data.jpa.repository.JpaRepository;
+
+import com.example.omniseek.entity.User;
 
 import java.util.Optional;
 

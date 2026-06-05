@@ -1,6 +1,6 @@
 package com.example.omniseek.config;
 
-import com.example.omniseek.model.FileUpload;
+import com.example.omniseek.entity.FileUpload;
 import com.example.omniseek.repository.FileUploadRepository;
 import com.example.omniseek.utils.JwtUtils;
 import jakarta.servlet.FilterChain;

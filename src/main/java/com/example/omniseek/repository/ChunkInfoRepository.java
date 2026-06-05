@@ -1,7 +1,8 @@
 package com.example.omniseek.repository;
 
-import com.example.omniseek.model.ChunkInfo;
 import org.springframework.data.jpa.repository.JpaRepository;
+
+import com.example.omniseek.entity.ChunkInfo;
 
 import java.util.List;
 

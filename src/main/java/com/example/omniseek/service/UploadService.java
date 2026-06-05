@@ -1,7 +1,7 @@
 package com.example.omniseek.service;
 
-import com.example.omniseek.model.ChunkInfo;
-import com.example.omniseek.model.FileUpload;
+import com.example.omniseek.entity.ChunkInfo;
+import com.example.omniseek.entity.FileUpload;
 import com.example.omniseek.repository.ChunkInfoRepository;
 import com.example.omniseek.repository.FileUploadRepository;
 import io.minio.*;

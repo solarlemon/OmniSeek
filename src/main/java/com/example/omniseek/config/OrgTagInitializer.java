@@ -1,7 +1,7 @@
 package com.example.omniseek.config;
 
-import com.example.omniseek.model.OrganizationTag;
-import com.example.omniseek.model.User;
+import com.example.omniseek.entity.OrganizationTag;
+import com.example.omniseek.entity.User;
 import com.example.omniseek.repository.OrganizationTagRepository;
 import com.example.omniseek.repository.UserRepository;
 import org.slf4j.Logger;

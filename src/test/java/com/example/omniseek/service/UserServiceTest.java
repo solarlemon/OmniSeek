@@ -1,7 +1,7 @@
 package com.example.omniseek.service;
 
+import com.example.omniseek.entity.User;
 import com.example.omniseek.exception.CustomException;
-import com.example.omniseek.model.User;
 import com.example.omniseek.repository.UserRepository;
 import com.example.omniseek.utils.PasswordUtil;
 import org.junit.jupiter.api.BeforeEach;

@@ -1,7 +1,7 @@
 package com.example.omniseek.controller;
 
-import com.example.omniseek.model.FileUpload;
-import com.example.omniseek.model.OrganizationTag;
+import com.example.omniseek.entity.FileUpload;
+import com.example.omniseek.entity.OrganizationTag;
 import com.example.omniseek.repository.FileUploadRepository;
 import com.example.omniseek.repository.OrganizationTagRepository;
 import com.example.omniseek.service.DocumentService;

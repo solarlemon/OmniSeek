@@ -1,4 +1,4 @@
-package com.example.omniseek.entity;
+package com.example.omniseek.dto;
 
 import lombok.Getter;
 import lombok.Setter;

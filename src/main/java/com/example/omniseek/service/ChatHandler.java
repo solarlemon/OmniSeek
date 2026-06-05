@@ -4,7 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.example.omniseek.client.DeepSeekClient;
-import com.example.omniseek.model.ChatSession;
+import com.example.omniseek.entity.ChatSession;
 import com.example.omniseek.router.RouteManager;
 import com.example.omniseek.service.ChatSessionService;
 import org.slf4j.Logger;

@@ -8,7 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import com.example.omniseek.model.User;
+import com.example.omniseek.entity.User;
 import com.example.omniseek.repository.UserRepository;
 import com.example.omniseek.service.TokenCacheService;
 

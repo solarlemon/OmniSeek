@@ -1,6 +1,6 @@
 package com.example.omniseek.service;
 
-import com.example.omniseek.model.DocumentVector;
+import com.example.omniseek.entity.DocumentVector;
 import com.example.omniseek.repository.DocumentVectorRepository;
 import org.apache.tika.exception.TikaException;
 import org.apache.tika.metadata.Metadata;

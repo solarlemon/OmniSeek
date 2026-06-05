@@ -1,7 +1,7 @@
 package com.example.omniseek.consumer;
 
 import com.example.omniseek.config.KafkaConfig;
-import com.example.omniseek.model.FileProcessingTask;
+import com.example.omniseek.entity.FileProcessingTask;
 import com.example.omniseek.service.ParseService;
 import com.example.omniseek.service.VectorizationService;
 import io.minio.errors.*;

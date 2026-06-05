@@ -1,10 +1,10 @@
 package com.example.omniseek.service;
 
 import com.example.omniseek.client.EmbeddingClient;
-import com.example.omniseek.model.DocumentVector;
-import com.example.omniseek.entity.ChromaDocument;
-import com.example.omniseek.entity.EsDocument;
-import com.example.omniseek.entity.TextChunk;
+import com.example.omniseek.dto.ChromaDocument;
+import com.example.omniseek.dto.EsDocument;
+import com.example.omniseek.dto.TextChunk;
+import com.example.omniseek.entity.DocumentVector;
 import com.example.omniseek.repository.DocumentVectorRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

@@ -1,7 +1,7 @@
 package com.example.omniseek.router;
 
 import com.example.omniseek.client.DeepSeekClient;
-import com.example.omniseek.entity.SearchResult;
+import com.example.omniseek.dto.SearchResult;
 import com.example.omniseek.service.HybridSearchService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
