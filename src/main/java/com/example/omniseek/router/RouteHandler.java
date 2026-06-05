@@ -14,5 +14,6 @@ public interface RouteHandler {
             List<Map<String, String>> history,
             WebSocketSession session,
             Consumer<String> onChunk,
-            Consumer<Throwable> onError);
+            Consumer<Throwable> onError,
+            Runnable onComplete);
 }
