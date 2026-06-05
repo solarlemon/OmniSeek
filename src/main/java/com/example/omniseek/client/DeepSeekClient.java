@@ -59,7 +59,11 @@ public class DeepSeekClient {
                 .bodyToFlux(String.class) // 转换成响应式流（FLUX）
                 .subscribe(
                         chunk -> processChunk(chunk, onChunk), // 处理每个响应块
-                        onError);
+                        onError,
+                        () -> { // Flux 完成回调
+                            if (onComplete != null)
+                                onComplete.run();
+                        });
     }
 
     private Map<String, Object> buildRequest(String userMessage,
