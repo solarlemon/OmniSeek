@@ -37,7 +37,8 @@ public class WebSearchHandler implements RouteHandler {
             List<Map<String, String>> history,
             WebSocketSession session,
             Consumer<String> onChunk,
-            Consumer<Throwable> onError) {
+            Consumer<Throwable> onError,
+            Runnable onComplete) {
         try {
             logger.info("联网搜索路由处理: userId={}, message={}", userId, userMessage);
 
@@ -76,7 +77,8 @@ public class WebSearchHandler implements RouteHandler {
                     context,
                     null, // 如果需要多轮对话历史，可以传；否则传 null 或空 List
                     onChunk,
-                    onError);
+                    onError,
+                    onComplete);
 
         } catch (Exception e) {
             logger.error("联网搜索路由处理失败", e);

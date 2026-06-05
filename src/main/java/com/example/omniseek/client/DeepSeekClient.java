@@ -8,6 +8,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.function.Consumer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -45,7 +46,8 @@ public class DeepSeekClient {
             String context,
             List<Map<String, String>> history,
             Consumer<String> onChunk,
-            Consumer<Throwable> onError) {
+            Consumer<Throwable> onError,
+            Runnable onComplete) {
         // 构建请求时明确指出需要流式响应 stream
         Map<String, Object> request = buildRequest(userMessage, context, history);
 
@@ -164,6 +166,42 @@ public class DeepSeekClient {
             }
         } catch (Exception e) {
             logger.error("处理数据块时出错: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 同步生成摘要（非流式），用于对话压缩
+     * 
+     * @param userMessage 用户消息（实际是待压缩的对话文本）
+     * @param context     上下文（可选，传 null）
+     * @param history     历史消息（可选，传空列表）
+     * @return 生成的摘要文本
+     */
+    public String generateSummary(String prompt) {
+        // 构造一个非流式请求
+        Map<String, Object> request = new HashMap<>();
+        request.put("model", model);
+        request.put("messages", List.of(Map.of("role", "user", "content", prompt)));
+        request.put("stream", false);
+        request.put("temperature", 0.1); // 低温度，提高稳定性
+
+        try {
+            String response = webClient.post()
+                    .uri("/chat/completions")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(request)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block(); // 阻塞获取完整响应
+
+            // 解析响应 JSON，提取 content
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode node = mapper.readTree(response);
+            String content = node.at("/choices/0/message/content").asText();
+            return (content == null || content.isBlank()) ? "摘要生成失败" : content;
+        } catch (Exception e) {
+            logger.error("生成摘要失败", e);
+            return "摘要生成失败，请稍后重试";
         }
     }
 }

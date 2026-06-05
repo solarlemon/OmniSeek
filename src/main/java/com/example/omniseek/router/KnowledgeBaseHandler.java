@@ -35,7 +35,8 @@ public class KnowledgeBaseHandler implements RouteHandler {
             List<Map<String, String>> history,
             WebSocketSession session,
             Consumer<String> onChunk,
-            Consumer<Throwable> onError) {
+            Consumer<Throwable> onError,
+            Runnable onComplete) {
         try {
             logger.info("知识库路由处理: userId={}, message={}", userId, userMessage);
 
@@ -47,7 +48,7 @@ public class KnowledgeBaseHandler implements RouteHandler {
             String context = buildContext(searchResults);
 
             // 调用 DeepSeek 生成回复
-            deepSeekClient.streamResponse(userMessage, context, history, onChunk, onError);
+            deepSeekClient.streamResponse(userMessage, context, history, onChunk, onError, onComplete);
 
         } catch (Exception e) {
             logger.error("知识库路由处理失败", e);

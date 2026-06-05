@@ -37,7 +37,8 @@ public class CalculatorHandler implements RouteHandler {
             List<Map<String, String>> history,
             WebSocketSession session,
             Consumer<String> onChunk,
-            Consumer<Throwable> onError) {
+            Consumer<Throwable> onError,
+            Runnable onComplete) {
         // TODO：实现计算器路由处理逻辑
     }
 }

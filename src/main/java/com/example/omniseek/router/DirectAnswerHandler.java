@@ -31,12 +31,13 @@ public class DirectAnswerHandler implements RouteHandler {
             List<Map<String, String>> history,
             WebSocketSession session,
             Consumer<String> onChunk,
-            Consumer<Throwable> onError) {
+            Consumer<Throwable> onError,
+            Runnable onComplete) {
         try {
             logger.info("直接回答路由处理: userId={}, message={}", userId, userMessage);
 
             // 直接调用 LLM，不传入检索上下文
-            deepSeekClient.streamResponse(userMessage, "", history, onChunk, onError);
+            deepSeekClient.streamResponse(userMessage, "", history, onChunk, onError, onComplete);
 
         } catch (Exception e) {
             logger.error("直接回答路由处理失败", e);
