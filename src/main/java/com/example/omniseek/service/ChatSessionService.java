@@ -33,6 +33,7 @@ public class ChatSessionService {
         session.setActive(true);
         session.setMessageCount(0);
 
+        //TODO:对话先存在Redis，一段时间后再从Redis迁移到数据库持久化存储
         return chatSessionRepository.save(session);
     }
 
