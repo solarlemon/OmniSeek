@@ -142,6 +142,12 @@ web-search:
     url: https://api.tavily.com/search
     key: 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
 
+# 对话归档配置
+conversation:
+  archive:
+    inactive-days: 3          # 会话无活动多少天后归档到 MySQL
+    scan-interval: 3600000     # 扫描间隔（毫秒），默认 1 小时
+
 ai:
   prompt:
     rules: |
