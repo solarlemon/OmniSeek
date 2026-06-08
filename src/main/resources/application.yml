@@ -104,7 +104,7 @@ log4j:
 deepseek:
   api:
     url: https://api.deepseek.com/v1  # 本地是 http://localhost:11434/v1 官方：https://api.deepseek.com/v1
-    model: deepseek-chat  # 本地: deepseek-r1:7b, 官方: deepseek-chat deepseek-ai/DeepSeek-R1
+    model: deepseek-chat  # deepseek-chat 与 deepseek-reasoner 两个模型名将于北京时间 2026/07/24 23:59 弃用。分别对应 deepseek-v4-flash 的非思考与思考模式。
     key:  sk-602c32a0c8644612bad3ec08c2c8b656 # DeepSeek API Key 如果是本地就为空
 
 #deepseek:
