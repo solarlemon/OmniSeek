@@ -197,6 +197,47 @@ public class ConversationArchiveService {
     }
 
     /**
+     * 将消息完整保存到 MySQL（供压缩前调用，确保早期消息不丢失）
+     */
+    @Transactional
+    public void saveMessagesBeforeCompaction(String sessionId, List<Map<String, String>> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return;
+        }
+
+        // 获取 userId
+        String userId = null;
+        try {
+            ChatSession session = chatSessionService.getSession(sessionId);
+            userId = String.valueOf(session.getUser().getId());
+        } catch (Exception e) {
+            logger.warn("保存压缩前消息时获取用户信息失败: sessionId={}", sessionId, e);
+            return;
+        }
+
+        List<ChatMessage> chatMessages = new ArrayList<>();
+        for (Map<String, String> msg : messages) {
+            String role = msg.get("role");
+            String content = msg.get("content");
+            String timestampStr = msg.get("timestamp");
+
+            LocalDateTime ts = LocalDateTime.now();
+            if (timestampStr != null) {
+                try {
+                    ts = LocalDateTime.parse(timestampStr);
+                } catch (Exception e) {
+                    // 忽略解析失败
+                }
+            }
+
+            chatMessages.add(new ChatMessage(sessionId, userId, role, content, ts));
+        }
+
+        chatMessageRepository.saveAll(chatMessages);
+        logger.info("压缩前已保存 {} 条消息到 MySQL，sessionId={}", chatMessages.size(), sessionId);
+    }
+
+    /**
      * 获取会话的历史消息（优先 Redis，Redis 没有则从 MySQL 读取）
      */
     public List<ChatMessage> getHistoryMessages(String sessionId) {

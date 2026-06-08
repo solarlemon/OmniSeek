@@ -209,9 +209,11 @@ ai:
             需要压缩的对话内容：
             {conversationText}
     window:
-      size: 2          # 滑动窗口式保留最近的 8 条消息（8/2=4 轮对话）
+      # 滑动窗口式保留最近的size条消息
+      # 触发压缩后Redis中只保留 size/2 轮对话，其他入数据库后压缩；触发前保留前 trigger/2 轮
+      size: 4
     compaction:
-      trigger: 4      # 窗口消息超过 trigger 条时触发压缩
+      trigger: 8 # 窗口消息超过 trigger 条时触发压缩
       max-input-chars: 4000  # 生成摘要时最大输入字符
   generation:
     temperature: 0.3

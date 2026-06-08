@@ -228,12 +228,20 @@ public class ChatHandler {
 
     /**
      * 执行压缩：保留最后 windowSize 条消息，前面的消息+旧摘要生成新摘要
+     * 压缩前会将早期消息完整保存到 MySQL，确保数据不丢失
      */
     private void compactConversation(String conversationId, List<Map<String, String>> currentWindow) {
         int keepCount = Math.min(windowSize, currentWindow.size());
         List<Map<String, String>> messagesToKeep = currentWindow.subList(currentWindow.size() - keepCount,
                 currentWindow.size());
         List<Map<String, String>> messagesToCompact = currentWindow.subList(0, currentWindow.size() - keepCount);
+
+        // 先完整保存到 MySQL，再压缩（确保早期消息不丢失）
+        try {
+            archiveService.saveMessagesBeforeCompaction(conversationId, new ArrayList<>(messagesToCompact));
+        } catch (Exception e) {
+            logger.error("压缩前保存消息到 MySQL 失败", e);
+        }
 
         String oldSummary = getSummary(conversationId);
         String newSummary = generateSummary(oldSummary, messagesToCompact);
