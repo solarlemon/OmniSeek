@@ -5,6 +5,8 @@ import com.example.omniseek.entity.User;
 import com.example.omniseek.exception.CustomException;
 import com.example.omniseek.repository.ChatSessionRepository;
 import com.example.omniseek.repository.UserRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -15,6 +17,8 @@ import java.util.UUID;
 
 @Service
 public class ChatSessionService {
+
+    private static final Logger logger = LoggerFactory.getLogger(ChatSessionService.class);
 
     @Autowired
     private ChatSessionRepository chatSessionRepository;
@@ -61,6 +65,25 @@ public class ChatSessionService {
         ChatSession session = getSession(sessionId);
         session.setMessageCount(session.getMessageCount() + 1);
         chatSessionRepository.save(session);
+    }
+
+    /**
+     * 归档会话时更新元数据（由 ConversationArchiveService 调用）
+     * 更新消息计数，如果标题为默认值则尝试设置标题
+     */
+    @Transactional
+    public void archiveSession(String sessionId, int messageCount, String summary) {
+        ChatSession session = getSession(sessionId);
+        session.setMessageCount(session.getMessageCount() + messageCount);
+
+        // 如果标题还是默认的"新对话"，尝试从摘要中提取标题
+        if ("新对话".equals(session.getTitle()) && summary != null && !summary.isBlank()) {
+            String title = summary.length() > 30 ? summary.substring(0, 30) + "..." : summary;
+            session.setTitle(title);
+        }
+
+        chatSessionRepository.save(session);
+        logger.info("会话归档元数据更新完成: sessionId={}, messageCount={}", sessionId, session.getMessageCount());
     }
 
     @Transactional

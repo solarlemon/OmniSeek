@@ -33,6 +33,7 @@ public class ChatHandler {
     private final RouteManager routeManager;
     private final DeepSeekClient deepSeekClient;
     private final ChatSessionService chatSessionService;
+    private final ConversationArchiveService archiveService;
     private final ObjectMapper objectMapper;
 
     // 滑动窗口配置
@@ -59,11 +60,13 @@ public class ChatHandler {
             RouteManager routeManager,
             DeepSeekClient deepSeekClient,
             ChatSessionService chatSessionService,
+            ConversationArchiveService archiveService,
             Executor compactionExecutor) {
         this.redisTemplate = redisTemplate;
         this.routeManager = routeManager;
         this.deepSeekClient = deepSeekClient;
         this.chatSessionService = chatSessionService;
+        this.archiveService = archiveService;
         this.objectMapper = new ObjectMapper();
         this.compactionExecutor = compactionExecutor;
     }
@@ -120,7 +123,8 @@ public class ChatHandler {
                         String fullResponse = responseBuilders.get(session.getId()).toString();
                         responseFuture.complete(fullResponse);
                         saveMessagesAndCompact(convId, userMessage, fullResponse);
-                        updateSessionAfterMessage(convId, userMessage, fullResponse);
+                        // 每次响应完成后，使用当前时间更新会话活动时间以实现定时归档
+                        archiveService.recordActivity(convId);
                         sendCompletionNotification(session);
                         cleanupSession(session.getId());
                     });
@@ -284,21 +288,6 @@ public class ChatHandler {
             redisTemplate.opsForValue().set(key, json, Duration.ofDays(7));
         } catch (JsonProcessingException e) {
             logger.error("保存窗口消息失败", e);
-        }
-    }
-
-    private void updateSessionAfterMessage(String conversationId, String userMessage, String assistantResponse) {
-        try {
-            chatSessionService.incrementMessageCount(conversationId);
-
-            // 如果是第一条消息，自动设置会话标题为用户问题的前20个字符
-            ChatSession session = chatSessionService.getSession(conversationId);
-            if (session.getMessageCount() == 1) {
-                String title = userMessage.length() > 20 ? userMessage.substring(0, 20) + "..." : userMessage;
-                chatSessionService.updateSessionTitle(conversationId, title);
-            }
-        } catch (Exception e) {
-            logger.error("更新会话信息失败", e);
         }
     }
 
