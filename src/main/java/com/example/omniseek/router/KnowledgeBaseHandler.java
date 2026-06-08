@@ -50,6 +50,8 @@ public class KnowledgeBaseHandler implements RouteHandler {
             // 调用 DeepSeek 生成回复
             deepSeekClient.streamResponse(userMessage, context, history, onChunk, onError, onComplete);
 
+            // TODO: 调用质量评估模型实现回复质量评估
+
         } catch (Exception e) {
             logger.error("知识库路由处理失败", e);
             onError.accept(e);
