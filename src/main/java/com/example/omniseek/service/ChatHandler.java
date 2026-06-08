@@ -81,16 +81,27 @@ public class ChatHandler {
          */
         logger.debug("开始处理消息，用户ID: {}, session ID: {}, conversationId: {}", userId, session.getId(), conversationId);
         try {
-            // 1. 获取会话 ID（优先使用传入的，否则创建新的）
+            // 1. 获取会话 ID（优先使用传入的，否则复用已存会话，再否则创建新的）
             String finalConversationId;
             if (conversationId != null && !conversationId.isBlank()) {
                 finalConversationId = conversationId;
                 logger.info("使用传入的会话ID: {}, 用户ID: {}", finalConversationId, userId);
             } else {
-                // 创建新会话并获取其 ID
-                ChatSession newSession = chatSessionService.createSession(userId);
-                finalConversationId = newSession.getSessionId();
-                logger.info("创建新会话，会话ID: {}, 用户ID: {}", finalConversationId, userId);
+                // 尝试从 Redis 获取用户当前活动的会话 ID
+                String currentSessionKey = "user:" + userId + ":current_session";
+                String existingSessionId = redisTemplate.opsForValue().get(currentSessionKey);
+
+                if (existingSessionId != null) {
+                    finalConversationId = existingSessionId;
+                    logger.info("复用用户当前会话ID: {}, 用户ID: {}", finalConversationId, userId);
+                } else {
+                    // 创建新会话并获取其 ID
+                    ChatSession newSession = chatSessionService.createSession(userId);
+                    finalConversationId = newSession.getSessionId();
+                    // 存入 Redis，下次复用
+                    redisTemplate.opsForValue().set(currentSessionKey, finalConversationId, Duration.ofDays(7));
+                    logger.info("创建新会话，会话ID: {}, 用户ID: {}", finalConversationId, userId);
+                }
             }
 
             // 为当前会话创建响应构建器
@@ -125,7 +136,7 @@ public class ChatHandler {
                         saveMessagesAndCompact(convId, userMessage, fullResponse);
                         // 每次响应完成后，使用当前时间更新会话活动时间以实现定时归档
                         archiveService.recordActivity(convId);
-                        sendCompletionNotification(session);
+                        sendCompletionNotification(session, convId);
                         cleanupSession(session.getId());
                     });
 
@@ -308,11 +319,12 @@ public class ChatHandler {
         }
     }
 
-    private void sendCompletionNotification(WebSocketSession session) {
+    private void sendCompletionNotification(WebSocketSession session, String sessionId) {
         try {
             Map<String, Object> notification = Map.of(
                     "type", "completion",
                     "status", "finished",
+                    "sessionId", sessionId,
                     "timestamp", System.currentTimeMillis());
             session.sendMessage(new TextMessage(objectMapper.writeValueAsString(notification)));
         } catch (Exception e) {
