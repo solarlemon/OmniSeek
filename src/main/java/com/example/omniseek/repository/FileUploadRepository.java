@@ -59,4 +59,6 @@ public interface FileUploadRepository extends JpaRepository<FileUpload, Long> {
     List<FileUpload> findByUserId(String userId);
 
     List<FileUpload> findByFileMd5In(List<String> md5List);
+
+    List<FileUpload> findTop10ByOrderByCreatedAtDesc();
 }
