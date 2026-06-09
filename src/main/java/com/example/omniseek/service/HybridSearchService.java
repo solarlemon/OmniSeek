@@ -14,6 +14,7 @@ import com.example.omniseek.repository.FileUploadRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
@@ -44,7 +45,6 @@ public class HybridSearchService {
     @Autowired
     private QwenRerankService qwenRerankService;
 
-
     @Autowired
     private UserRepository userRepository;
 
@@ -59,6 +59,9 @@ public class HybridSearchService {
 
     @Autowired
     private QueryRewriterService queryRewriterService;
+
+    @Value("${ai.relevance-threshold:0.5}")
+    private double relevanceThreshold;
 
     /**
      * 使用文本匹配和向量相似度进行混合搜索，支持权限过滤
@@ -195,7 +198,16 @@ public class HybridSearchService {
                     .toList();
 
             // 5. Qwen3-Rerank 精排
-            List<SearchResult> finalResults = qwenRerankService.rerank(hypotheticalAnswer, rrfResults, topK);
+            List<SearchResult> reranked = qwenRerankService.rerank(hypotheticalAnswer, rrfResults, topK);
+
+            List<SearchResult> finalResults = reranked.stream()
+                    .filter(r -> r.getScore() >= relevanceThreshold)
+                    .collect(Collectors.toList());
+
+            if (finalResults.isEmpty()) {
+                logger.warn("所有文档相关性低于阈值 {}，无有效结果", relevanceThreshold);
+                return Collections.emptyList(); // 上层会处理无结果情况
+            }
 
             // 6. 设置最终排名 1,2,3...
             AtomicInteger currentRank = new AtomicInteger(1);
