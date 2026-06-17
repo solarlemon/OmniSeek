@@ -148,6 +148,7 @@ public class ChatHandler {
     }
 
     public void stopResponse(String userId, WebSocketSession session) {
+        /* 处理用户停止响应请求，接收到停止请求后，设置对应用户id的停止标志位为 true */
         String sessionId = session.getId();
         logger.info("收到停止请求，用户ID: {}, 会话ID: {}", userId, sessionId);
         stopFlags.put(sessionId, true);
@@ -160,6 +161,7 @@ public class ChatHandler {
         } catch (Exception e) {
             logger.error("发送停止确认失败", e);
         }
+        // 等待 2 秒，确保前端有足够的时间处理停止确认
         new Thread(() -> {
             try {
                 Thread.sleep(2000);
@@ -311,12 +313,14 @@ public class ChatHandler {
     }
 
     private void cleanupSession(String sessionId) {
+        /* 清理会话资源，包括响应构建器、响应未来和停止标志位 ，防止 OOM*/
         responseBuilders.remove(sessionId);
         responseFutures.remove(sessionId);
         stopFlags.remove(sessionId);
     }
 
     private void sendResponseChunk(WebSocketSession session, String chunk) {
+        /*发送消息到前端，实时更新响应内容。每次都会检查是否需要停止 */
         if (Boolean.TRUE.equals(stopFlags.get(session.getId())))
             return;
         try {
