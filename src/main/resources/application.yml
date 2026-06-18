@@ -105,7 +105,7 @@ deepseek:
   api:
     url: https://api.deepseek.com/v1  # 本地是 http://localhost:11434/v1 官方：https://api.deepseek.com/v1
     model: deepseek-chat  # deepseek-chat 与 deepseek-reasoner 两个模型名将于北京时间 2026/07/24 23:59 弃用。分别对应 deepseek-v4-flash 的非思考与思考模式。
-    key:  sk-602c32a0c8644612bad3ec08c2c8b656 # DeepSeek API Key 如果是本地就为空
+    key:  ${deepseek_api_key} # DeepSeek API Key 如果是本地就为空
 
 #deepseek:
 #  api:
@@ -117,12 +117,12 @@ rerank:
   api:
     url: https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank
     model: qwen3-rerank
-    key: sk-b9b0ecee96f14bf7b5c880231e87e1ae
+    key: ${qwen3_rerank_api_key}
 
 embedding:
   api:
     url: https://dashscope.aliyuncs.com/compatible-mode/v1
-    key: sk-b9b0ecee96f14bf7b5c880231e87e1ae   # 填入通义千问API key
+    key: ${embedding_api_key}   # 填入通义千问API key
     model: text-embedding-v4
     dimension: 2048  # 指定向量维度
     batch-size: 10  # DashScope API 限制最大批量为 10
@@ -140,7 +140,7 @@ chroma:
 web-search:
   api:
     url: https://api.tavily.com/search
-    key: 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
+    key: ${web_search_api_key}
 
 # 对话归档配置
 conversation:
