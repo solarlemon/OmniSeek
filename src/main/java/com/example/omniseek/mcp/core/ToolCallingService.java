@@ -57,7 +57,12 @@ public class ToolCallingService {
                     continue;
                 }
 
-                String toolName = provider.getToolName();
+                // 使用 @Tool 注解的值作为函数名（保证唯一性），如果为空则用 provider 名称
+                String[] toolNames = toolAnnotation.value();
+                String toolName = (toolNames != null && toolNames.length > 0
+                        && toolNames[0] != null && !toolNames[0].isEmpty())
+                                ? toolNames[0]
+                                : provider.getToolName();
                 String description = provider.getDescription();
 
                 // 构建参数定义

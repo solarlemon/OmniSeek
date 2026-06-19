@@ -23,6 +23,7 @@ public class DeepSeekClient {
     private final String apiKey;
     private final String model;
     private final AiProperties aiProperties;
+    private final ObjectMapper objectMapper = new ObjectMapper();
     private static final Logger logger = LoggerFactory.getLogger(DeepSeekClient.class);
 
     public DeepSeekClient(@Value("${deepseek.api.url}") String apiUrl,
@@ -207,5 +208,80 @@ public class DeepSeekClient {
             logger.error("生成摘要失败", e);
             return "摘要生成失败，请稍后重试";
         }
+    }
+
+    /**
+     * 非流式调用 LLM，支持 tools 参数（用于检测是否需要调用工具）
+     *
+     * @param messages 消息列表（格式同 OpenAI API）
+     * @param tools    工具定义列表
+     * @return 原始响应 JSON 字符串
+     */
+    public String callWithTools(List<Map<String, Object>> messages, List<Map<String, Object>> tools) {
+        Map<String, Object> request = new HashMap<>();
+        request.put("model", model);
+        request.put("messages", messages);
+        request.put("stream", false);
+        request.put("temperature", aiProperties.getGeneration().getTemperature());
+        request.put("max_tokens", aiProperties.getGeneration().getMaxTokens());
+        request.put("top_p", aiProperties.getGeneration().getTopP());
+        if (tools != null && !tools.isEmpty()) {
+            request.put("tools", tools);
+        }
+
+        try {
+            String response = webClient.post()
+                    .uri("/chat/completions")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(request)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block();
+            logger.debug("非流式调用响应: {}",
+                    response != null ? response.substring(0, Math.min(200, response.length())) : "null");
+            return response;
+        } catch (Exception e) {
+            logger.error("非流式调用失败", e);
+            // 记录请求体以便调试
+            try {
+                String requestJson = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(request);
+                logger.error("请求体(前2000字符): {}", requestJson.substring(0, Math.min(2000, requestJson.length())));
+            } catch (Exception ex) {
+                logger.error("序列化请求体失败", ex);
+            }
+            return null;
+        }
+    }
+
+    /**
+     * 流式调用 LLM，支持传入完整消息列表（含 tool 结果）
+     *
+     * @param messages   消息列表
+     * @param onChunk    内容块回调
+     * @param onError    错误回调
+     * @param onComplete 完成回调
+     */
+    public void streamChat(List<Map<String, Object>> messages,
+            Consumer<String> onChunk,
+            Consumer<Throwable> onError,
+            Runnable onComplete) {
+        Map<String, Object> request = new HashMap<>();
+        request.put("model", model);
+        request.put("messages", messages);
+        request.put("stream", true);
+        request.put("temperature", aiProperties.getGeneration().getTemperature());
+        request.put("max_tokens", aiProperties.getGeneration().getMaxTokens());
+        request.put("top_p", aiProperties.getGeneration().getTopP());
+
+        webClient.post()
+                .uri("/chat/completions")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToFlux(String.class)
+                .subscribe(
+                        chunk -> processChunk(chunk, onChunk),
+                        onError,
+                        onComplete);
     }
 }

@@ -29,8 +29,8 @@ public class IntentRouterService {
     private static final Pattern WEB_SEARCH_PATTERN = Pattern.compile(
             ".*(新闻|天气|股票|汇率|今天|实时|最新).*",
             Pattern.CASE_INSENSITIVE);
-    private static final Pattern SQL_QUERY_PATTERN = Pattern.compile(
-            ".*(多少用户|用户数量|几位用户|多少个用户|上传.*文件|文档.*数量|谁的会话|哪个会话|消息最多|几条消息|聊天记录|最近.*上传|统计|查询.*数据|数据库).*",
+    private static final Pattern TOOL_CALLING_PATTERN = Pattern.compile(
+            ".*(切片数量|切片总数|文档总数|知识库统计|知识库中|有多少.*文档|有多少.*切片|向量库|统计信息|切片数|文档数|多少用户|用户数量|几位用户|多少个用户|上传.*文件|文档.*数量|谁的会话|哪个会话|消息最多|几条消息|聊天记录|最近.*上传|统计|查询.*数据|数据库).*",
             Pattern.CASE_INSENSITIVE);
 
     public IntentRouterService(LLMIntentClassifier llmClassifier,
@@ -80,9 +80,9 @@ public class IntentRouterService {
         if (CALCULATOR_PATTERN.matcher(message).matches()) {
             return new RuleResult(RouteType.CALCULATOR, true);
         }
-        // SQL 数据查询
-        if (SQL_QUERY_PATTERN.matcher(message).matches()) {
-            return new RuleResult(RouteType.SQL_QUERY, true);
+        // MCP 工具调用（知识库统计、系统信息等）
+        if (TOOL_CALLING_PATTERN.matcher(message).matches()) {
+            return new RuleResult(RouteType.TOOL_CALLING, true);
         }
         // 问候/闲聊 -> 直接回答
         if (GREETING_PATTERN.matcher(message).matches()) {
