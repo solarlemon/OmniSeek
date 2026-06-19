@@ -23,7 +23,7 @@ public class RouteManager {
             KnowledgeBaseHandler knowledgeBaseHandler,
             WebSearchHandler webSearchHandler,
             CalculatorHandler calculatorHandler,
-            SqlQueryHandler sqlQueryHandler,
+            ToolCallingHandler toolCallingHandler,
             DirectAnswerHandler directAnswerHandler) {
         this.intentRouter = intentRouter;
 
@@ -31,7 +31,7 @@ public class RouteManager {
         handlers.put(RouteType.KNOWLEDGE_BASE, knowledgeBaseHandler);
         handlers.put(RouteType.WEB_SEARCH, webSearchHandler);
         handlers.put(RouteType.CALCULATOR, calculatorHandler);
-        handlers.put(RouteType.SQL_QUERY, sqlQueryHandler);
+        handlers.put(RouteType.TOOL_CALLING, toolCallingHandler);
         handlers.put(RouteType.DIRECT_ANSWER, directAnswerHandler);
     }
 
