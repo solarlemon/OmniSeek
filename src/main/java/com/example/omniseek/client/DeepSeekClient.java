@@ -227,6 +227,7 @@ public class DeepSeekClient {
         request.put("top_p", aiProperties.getGeneration().getTopP());
         if (tools != null && !tools.isEmpty()) {
             request.put("tools", tools);
+            request.put("tool_choice", "auto");
         }
 
         try {
@@ -241,7 +242,7 @@ public class DeepSeekClient {
                     response != null ? response.substring(0, Math.min(200, response.length())) : "null");
             return response;
         } catch (Exception e) {
-            logger.error("非流式调用失败", e);
+            logger.error("非流式调用失败: {}", e.getMessage());
             // 记录请求体以便调试
             try {
                 String requestJson = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(request);
