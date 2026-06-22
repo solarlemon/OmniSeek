@@ -2,8 +2,8 @@ package com.example.omniseek.router;
 
 public enum RouteType {
     KNOWLEDGE_BASE("knowledge_base", "RAG知识库"),
-    WEB_SEARCH("web_search", "联网搜索"),
     CALCULATOR("calculator", "计算器"),
+    SQL_QUERY("sql_query", "数据库查询"),
     TOOL_CALLING("tool_calling", "MCP工具调用"),
     DIRECT_ANSWER("direct_answer", "直接回答");
 
