@@ -21,7 +21,6 @@ public class RouteManager {
 
     public RouteManager(IntentRouterService intentRouter,
             KnowledgeBaseHandler knowledgeBaseHandler,
-            WebSearchHandler webSearchHandler,
             CalculatorHandler calculatorHandler,
             ToolCallingHandler toolCallingHandler,
             DirectAnswerHandler directAnswerHandler) {
@@ -29,7 +28,6 @@ public class RouteManager {
 
         // 注册所有路由处理器
         handlers.put(RouteType.KNOWLEDGE_BASE, knowledgeBaseHandler);
-        handlers.put(RouteType.WEB_SEARCH, webSearchHandler);
         handlers.put(RouteType.CALCULATOR, calculatorHandler);
         handlers.put(RouteType.TOOL_CALLING, toolCallingHandler);
         handlers.put(RouteType.DIRECT_ANSWER, directAnswerHandler);

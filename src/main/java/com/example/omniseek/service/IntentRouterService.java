@@ -6,7 +6,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import com.example.omniseek.router.RouteType;
-import com.example.omniseek.service.LLMIntentClassifier;
 
 import java.util.regex.Pattern;
 
@@ -19,18 +18,18 @@ public class IntentRouterService {
     private final boolean llmEnabled;
     private final double confidenceThreshold;
 
-    // 规则模式（示例，可按需扩展）
+    // 规则模式（可按需扩展）
     private static final Pattern CALCULATOR_PATTERN = Pattern.compile(
             ".*(计算|等于|是多少|\\+|\\-|\\*|/|平方|根号|积分|求导).*",
             Pattern.CASE_INSENSITIVE);
     private static final Pattern GREETING_PATTERN = Pattern.compile(
             "^(你好|您好|hi|hello|嗨|早上好|下午好|晚上好)$",
             Pattern.CASE_INSENSITIVE);
-    private static final Pattern WEB_SEARCH_PATTERN = Pattern.compile(
-            ".*(新闻|天气|股票|汇率|今天|实时|最新).*",
-            Pattern.CASE_INSENSITIVE);
+    // MCP 工具调用模式（知识库系统统计 + 网络搜索）
     private static final Pattern TOOL_CALLING_PATTERN = Pattern.compile(
-            ".*(切片数量|切片总数|文档总数|知识库统计|知识库中|有多少.*文档|有多少.*切片|向量库|统计信息|切片数|文档数|多少用户|用户数量|几位用户|多少个用户|上传.*文件|文档.*数量|谁的会话|哪个会话|消息最多|几条消息|聊天记录|最近.*上传|统计|查询.*数据|数据库).*",
+            ".*(切片数量|切片总数|文档总数|知识库统计|知识库中|有多少.*文档|有多少.*切片|向量库|统计信息|切片数|文档数|" +
+                    "多少用户|用户数量|几位用户|多少个用户|上传.*文件|文档.*数量|谁的会话|哪个会话|消息最多|几条消息|聊天记录|最近.*上传|查询.*数据|数据库|" +
+                    "新闻|天气|股票|汇率|今天|实时|最新).*",
             Pattern.CASE_INSENSITIVE);
 
     public IntentRouterService(LLMIntentClassifier llmClassifier,
@@ -80,18 +79,13 @@ public class IntentRouterService {
         if (CALCULATOR_PATTERN.matcher(message).matches()) {
             return new RuleResult(RouteType.CALCULATOR, true);
         }
-        // MCP 工具调用（知识库统计、系统信息等）
+        // MCP 工具调用（知识库统计 + 网络搜索）
         if (TOOL_CALLING_PATTERN.matcher(message).matches()) {
             return new RuleResult(RouteType.TOOL_CALLING, true);
         }
         // 问候/闲聊 -> 直接回答
         if (GREETING_PATTERN.matcher(message).matches()) {
             return new RuleResult(RouteType.DIRECT_ANSWER, true);
-        }
-        // 明显需要网络搜索的
-        if (WEB_SEARCH_PATTERN.matcher(message).matches()) {
-            // 这里置信度可设为中等，因为可能误判
-            return new RuleResult(RouteType.WEB_SEARCH, false);
         }
         // 默认知识库路由，置信度低
         return new RuleResult(RouteType.KNOWLEDGE_BASE, false);
