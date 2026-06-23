@@ -27,6 +27,9 @@ public class QueryRewriterService {
         @Value("${ai.hyde.prompt-template}")
         private String hydePromptTemplate;
 
+        @Value("${ai.expand-query.prompt-template}")
+        private String expandPromptTemplate;
+
         public QueryRewriterService(@Value("${deepseek.api.url}") String apiUrl,
                         @Value("${deepseek.api.key}") String apiKey,
                         @Value("${deepseek.api.model}") String model) {
@@ -75,6 +78,55 @@ public class QueryRewriterService {
          */
         public String generateHypotheticalAnswerBlocking(String originalQuery) {
                 return generateHypotheticalAnswer(originalQuery).block();
+        }
+
+        /**
+         * 扩展查询：生成多个子问题（同步阻塞，带降级）
+         * 
+         * @param originalQuery 原始问题
+         * @return 子问题列表，若失败则仅包含原始问题
+         */
+        public List<String> rewriteQuery(String originalQuery) {
+                String prompt = String.format(expandPromptTemplate, originalQuery);
+
+                Map<String, Object> requestBody = Map.of(
+                                "model", model,
+                                "messages", List.of(
+                                                Map.of("role", "system", "content", "你是一个专业的查询改写助手。"),
+                                                Map.of("role", "user", "content", prompt)),
+                                "temperature", 0.3,
+                                "max_tokens", 150,
+                                "stream", false);
+
+                try {
+                        String response = webClient.post()
+                                        .uri("/chat/completions")
+                                        .bodyValue(requestBody)
+                                        .retrieve()
+                                        .bodyToMono(String.class)
+                                        .block();
+
+                        if (response != null) {
+                                String content = extractContent(response);
+                                if (content != null && !content.isEmpty()) {
+                                        // 按行分割，过滤空行
+                                        List<String> queries = content.lines()
+                                                        .map(String::trim)
+                                                        .filter(line -> !line.isEmpty() && line.endsWith("?"))
+                                                        .toList();
+
+                                        if (!queries.isEmpty()) {
+                                                logger.info("查询扩展成功：{} -> {}", originalQuery, queries);
+                                                return queries;
+                                        }
+                                }
+                        }
+                } catch (Exception e) {
+                        logger.error("查询扩展失败，降级为原始查询", e);
+                }
+
+                // 降级：返回包含原始问题的单元素列表
+                return List.of(originalQuery);
         }
 
         /**
