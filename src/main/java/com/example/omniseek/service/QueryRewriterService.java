@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,6 +18,12 @@ import reactor.core.publisher.Mono;
 public class QueryRewriterService {
 
         private static final Logger logger = LoggerFactory.getLogger(QueryRewriterService.class);
+
+        /**
+         * HyDE 适用条件：当 query 过短（如少于 10 个字符）时，使用 HyDE 生成假设性答案来扩展语义
+         * 短查询通常语义不完整，向量搜索定位不准，HyDE 能有效补充上下文
+         */
+        public static final int HYDE_MIN_QUERY_LENGTH = 10;
 
         private final WebClient webClient;
 
@@ -110,9 +117,19 @@ public class QueryRewriterService {
                                 String content = extractContent(response);
                                 if (content != null && !content.isEmpty()) {
                                         // 按行分割，过滤空行
+                                        // 同时支持中英文问号和陈述句格式，提高容错性
                                         List<String> queries = content.lines()
                                                         .map(String::trim)
-                                                        .filter(line -> !line.isEmpty() && line.endsWith("?"))
+                                                        .filter(line -> !line.isEmpty())
+                                                        // 支持问句形式（中英文问号）或陈述句形式
+                                                        .filter(line -> line.endsWith("?")
+                                                                        || line.endsWith("？")
+                                                                        || line.length() > 2)
+                                                        .map(line -> {
+                                                                // 去除开头序号（1. 2. 3. 等）
+                                                                return line.replaceFirst("^[\\d]+[.、]\\s*", "")
+                                                                                .replaceFirst("^[\\d]+[)]", "");
+                                                        })
                                                         .toList();
 
                                         if (!queries.isEmpty()) {
@@ -150,5 +167,50 @@ public class QueryRewriterService {
                         logger.error("解析响应失败：{}", responseBody, e);
                         throw new RuntimeException("解析 DeepSeek 响应失败", e);
                 }
+        }
+
+        /**
+         * 缓存：query -> HyDE 结果
+         */
+        private final ConcurrentHashMap<String, String> hydeCache = new ConcurrentHashMap<>();
+
+        /**
+         * 判断是否应该使用 HyDE
+         * 适用场景：
+         * 1. query 过短（如少于 10 个字符），语义不完整
+         * 2. 用户用简短关键词提问，向量搜索定位不准
+         *
+         * @param query 原始查询
+         * @return true 表示应该使用 HyDE，false 表示直接使用原查询
+         */
+        public boolean shouldUseHyDE(String query) {
+                if (query == null || query.isEmpty()) {
+                        return false;
+                }
+                int length = query.trim().length();
+                boolean shouldHyde = length < HYDE_MIN_QUERY_LENGTH;
+                if (shouldHyde) {
+                        logger.debug("查询过短（{} 字符 < {}），将使用 HyDE 扩展语义: {}",
+                                        length, HYDE_MIN_QUERY_LENGTH, query);
+                }
+                return shouldHyde;
+        }
+
+        /**
+         * 根据 query 长度决定使用 HyDE 还是原查询
+         * - 如果 query 过短，使用 HyDE 生成假设性答案
+         * - 否则直接返回原查询
+         *
+         * @param query 原始查询
+         * @return 用于搜索的查询文本（HyDE 结果或原查询）
+         */
+        public String getSearchQuery(String query) {
+                if (shouldUseHyDE(query)) {
+                        // HyDE 结果使用缓存，避免重复生成
+                        return hydeCache.computeIfAbsent(query, q -> generateHypotheticalAnswerBlocking(q));
+                }
+                logger.debug("查询长度足够（{} 字符 >= {}），直接使用原查询: {}",
+                                query.trim().length(), HYDE_MIN_QUERY_LENGTH, query);
+                return query;
         }
 }
