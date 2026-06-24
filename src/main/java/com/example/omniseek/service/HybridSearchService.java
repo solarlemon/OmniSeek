@@ -67,6 +67,10 @@ public class HybridSearchService {
      * 使用文本匹配和向量相似度进行混合搜索，支持权限过滤
      * 该方法确保用户只能搜索其有权限访问的文档（自己的文档、公开文档、所属组织的文档）
      *
+     * 搜索策略：
+     * - 短查询（< 10 字符）：使用 HyDE 生成假设性答案，仅走语义查询
+     * - 长查询（>= 10 字符）：走语义 + BM25 混合检索 + query 改写
+     *
      * @param query  查询字符串
      * @param userId 用户ID
      * @param topK   返回结果数量
@@ -84,138 +88,17 @@ public class HybridSearchService {
             String userDbId = getUserDbId(userId);
             logger.debug("用户 {} 的数据库ID: {}", userId, userDbId);
 
-            // TODO：实现查询改写以及意图识别
-            // 多轮对话中，根据用户之前的查询历史，对当前查询进行改写，提高搜索效率
-            // 判断用户是在“查知识”、“闲聊”还是“要求执行操作”。如果是闲聊，可以直接跳过 RAG 检索，节省资源。
-
-            // HyDE：先让大模型生成一个伪答案，再用伪答案去搜知识库（这在处理“问题与答案表达差异大”时非常有效）
-            String hypotheticalAnswer = queryRewriterService.generateHypotheticalAnswerBlocking(query);
-
-            // 根据查询的文本字符生成查询向量
-            final List<Float> queryVector = embedToVectorList(hypotheticalAnswer);
-
-            // 如果向量生成失败，仅使用文本匹配
-            if (queryVector == null) {
-                logger.warn("向量生成失败，仅使用文本匹配进行搜索");
-                return textOnlySearchWithPermission(hypotheticalAnswer, userDbId, userEffectiveTags, topK);
+            // 智能决策：根据查询长度决定搜索策略
+            boolean useHyde = queryRewriterService.shouldUseHyDE(query);
+            if (useHyde) {
+                // 短查询，使用 HyDE 扩展语义，并且只走HyDE的语义查询
+                logger.info("查询过短，使用 HyDE 语义搜索策略");
+                return hydeSearchWithPermission(query, userId, userDbId, userEffectiveTags, topK);
+            } else {
+                // 长查询，走语义 + BM25 混合检索 + query 改写
+                logger.info("查询长度足够，使用混合搜索 + Query Rewrite 策略");
+                return mixedSearchWithPermission(query, userDbId, userEffectiveTags, topK);
             }
-            logger.info("向量生成成功，开始执行混合搜索（Chroma + ES + RRF + Qwen3-Rerank）");
-
-            int recallK = topK * 30;
-            final int rrfK = 60;
-
-            // 1. 向量搜索
-            float[] queryEmbedding = new float[queryVector.size()];
-            for (int i = 0; i < queryVector.size(); i++) {
-                queryEmbedding[i] = queryVector.get(i);
-            }
-            List<ChromaService.ChromaSearchResponse> chromaResponse = chromaService.search(
-                    queryEmbedding, recallK, userDbId, userEffectiveTags);
-
-            // 2. ES 文本搜索
-            SearchResponse<EsDocument> bm25Response = esClient.search(s -> {
-                s.index("knowledge_base");
-                s.query(q -> q.bool(b -> b
-                        .must(mst -> mst.match(m -> m.field("textContent").query(hypotheticalAnswer)))
-                        .filter(f -> f.bool(bf -> bf
-                                .should(s1 -> s1.term(t -> t.field("userId").value(userDbId)))
-                                .should(s2 -> s2.term(t -> t.field("public").value(true)))
-                                .should(s3 -> {
-                                    if (userEffectiveTags.isEmpty()) {
-                                        return s3.matchNone(mn -> mn);
-                                    } else if (userEffectiveTags.size() == 1) {
-                                        return s3.term(t -> t.field("orgTag").value(userEffectiveTags.get(0)));
-                                    } else {
-                                        return s3.bool(inner -> {
-                                            userEffectiveTags.forEach(tag -> inner
-                                                    .should(sh2 -> sh2.term(t -> t.field("orgTag").value(tag))));
-                                            return inner;
-                                        });
-                                    }
-                                })))));
-                s.size(recallK);
-                return s;
-            }, EsDocument.class);
-
-            // 3. RRF 粗排融合
-            Map<String, Double> rrfScores = new HashMap<>();
-            Map<String, SearchResult> documentMap = new HashMap<>();
-
-            // 处理 Chroma 结果
-            int rank = 1;
-            for (ChromaService.ChromaSearchResponse hit : chromaResponse) {
-                String docId = hit.getFileMd5() + "_" + hit.getChunkId();
-                double rrfScore = 1.0 / (rrfK + rank);
-                rrfScores.merge(docId, rrfScore, Double::sum);
-
-                if (!documentMap.containsKey(docId)) {
-                    documentMap.put(docId, new SearchResult(
-                            hit.getFileMd5(),
-                            hit.getChunkId(),
-                            hit.getTextContent(),
-                            Double.valueOf(hit.getScore()),
-                            userId,
-                            null,
-                            false));
-                }
-                rank++;
-            }
-
-            // 处理 BM25 结果
-            rank = 1;
-            for (co.elastic.clients.elasticsearch.core.search.Hit<EsDocument> hit : bm25Response.hits().hits()) {
-                if (hit.source() != null) {
-                    String docId = hit.source().getFileMd5() + "_" + hit.source().getChunkId();
-                    double rrfScore = 1.0 / (rrfK + rank);
-                    rrfScores.merge(docId, rrfScore, Double::sum);
-
-                    if (!documentMap.containsKey(docId)) {
-                        documentMap.put(docId, new SearchResult(
-                                hit.source().getFileMd5(),
-                                hit.source().getChunkId(),
-                                hit.source().getTextContent(),
-                                hit.score(),
-                                hit.source().getUserId(),
-                                hit.source().getOrgTag(),
-                                hit.source().isPublic()));
-                    } else {
-                        SearchResult existing = documentMap.get(docId);
-                        if (existing.getUserId() == null) {
-                            existing.setUserId(hit.source().getUserId());
-                            existing.setOrgTag(hit.source().getOrgTag());
-                            existing.setIsPublic(hit.source().isPublic());
-                        }
-                    }
-                    rank++;
-                }
-            }
-
-            // 4. RRF 粗排结果（取前30条给rerank精排）
-            List<SearchResult> rrfResults = rrfScores.entrySet().stream()
-                    .sorted((e1, e2) -> Double.compare(e2.getValue(), e1.getValue()))
-                    .limit(topK * 2)
-                    .map(entry -> documentMap.get(entry.getKey()))
-                    .toList();
-
-            // 5. Qwen3-Rerank 精排
-            List<SearchResult> reranked = qwenRerankService.rerank(hypotheticalAnswer, rrfResults, topK);
-
-            List<SearchResult> finalResults = reranked.stream()
-                    .filter(r -> r.getScore() >= relevanceThreshold)
-                    .collect(Collectors.toList());
-
-            if (finalResults.isEmpty()) {
-                logger.warn("所有文档相关性低于阈值 {}，无有效结果", relevanceThreshold);
-                return Collections.emptyList(); // 上层会处理无结果情况
-            }
-
-            // 6. 设置最终排名 1,2,3...
-            AtomicInteger currentRank = new AtomicInteger(1);
-            finalResults.forEach(item -> item.setRank(currentRank.getAndIncrement()));
-
-            logger.debug("最终返回结果数量: {}", finalResults.size());
-            attachFileNames(finalResults);
-            return finalResults;
 
         } catch (Exception e) {
             logger.error("带权限的搜索失败", e);
@@ -227,6 +110,307 @@ public class HybridSearchService {
                 return Collections.emptyList();
             }
         }
+    }
+
+    /**
+     * HyDE 语义搜索（仅用于短查询）
+     * 策略：HyDE 生成假设性答案 → 仅走语义向量搜索 → Rerank
+     * 不使用 BM25，因为 HyDE 结果已经是扩展后的语义表达
+     */
+    private List<SearchResult> hydeSearchWithPermission(String query, String userId, String userDbId,
+            List<String> userEffectiveTags, int topK) throws Exception {
+        // HyDE 生成假设性答案
+        String hypotheticalAnswer = queryRewriterService.generateHypotheticalAnswerBlocking(query);
+        logger.info("HyDE 生成假设性答案: {}", hypotheticalAnswer);
+
+        // 生成查询向量
+        final List<Float> queryVector = embedToVectorList(hypotheticalAnswer);
+        if (queryVector == null) {
+            logger.warn("HyDE 向量生成失败，降级为纯文本搜索");
+            return textOnlySearchWithPermission(query, userDbId, userEffectiveTags, topK);
+        }
+
+        logger.info("HyDE 语义搜索：仅走向量搜索");
+        int recallK = topK * 30;
+        final int rrfK = 60;
+
+        // 1. 仅执行 Chroma 向量搜索（无 BM25）
+        float[] queryEmbedding = new float[queryVector.size()];
+        for (int i = 0; i < queryVector.size(); i++) {
+            queryEmbedding[i] = queryVector.get(i);
+        }
+        List<ChromaService.ChromaSearchResponse> chromaResponse = chromaService.search(
+                queryEmbedding, recallK, userDbId, userEffectiveTags);
+
+        // 2. 构建 SearchResult
+        Map<String, SearchResult> documentMap = new HashMap<>();
+        int rank = 1;
+        for (ChromaService.ChromaSearchResponse hit : chromaResponse) {
+            String docId = hit.getFileMd5() + "_" + hit.getChunkId();
+            documentMap.put(docId, new SearchResult(
+                    hit.getFileMd5(),
+                    hit.getChunkId(),
+                    hit.getTextContent(),
+                    Double.valueOf(hit.getScore()),
+                    userId,
+                    null,
+                    false));
+            rank++;
+        }
+
+        // 3. 直接给 Rerank（不需要 RRF，因为没有多路召回）
+        List<SearchResult> rrfResults = documentMap.values().stream()
+                .limit(topK * 2)
+                .toList();
+
+        // 4. Qwen3-Rerank 精排
+        List<SearchResult> reranked = qwenRerankService.rerank(hypotheticalAnswer, rrfResults, topK);
+        List<SearchResult> finalResults = reranked.stream()
+                .filter(r -> r.getScore() >= relevanceThreshold)
+                .collect(Collectors.toList());
+
+        if (finalResults.isEmpty()) {
+            logger.warn("HyDE 语义搜索所有文档相关性低于阈值 {}，无有效结果", relevanceThreshold);
+            return Collections.emptyList();
+        }
+
+        // 5. 设置最终排名
+        AtomicInteger currentRank = new AtomicInteger(1);
+        finalResults.forEach(item -> item.setRank(currentRank.getAndIncrement()));
+
+        logger.debug("HyDE 语义搜索最终返回结果数量: {}", finalResults.size());
+        attachFileNames(finalResults);
+        return finalResults;
+    }
+
+    /**
+     * 混合搜索 + Query Rewrite（用于长查询）
+     * 策略：
+     *   1. 语义搜索（原查询）
+     *   2. BM25 搜索（原查询）
+     *   3. Query Rewrite 生成改写查询 → 语义搜索 + BM25
+     *   4. 所有结果 RRF 融合 → Rerank
+     */
+    private List<SearchResult> mixedSearchWithPermission(String query, String userDbId,
+            List<String> userEffectiveTags, int topK) throws Exception {
+        logger.info("执行混合搜索（语义 + BM25）+ Query Rewrite");
+
+        // 生成查询向量
+        final List<Float> queryVector = embedToVectorList(query);
+        if (queryVector == null) {
+            logger.warn("向量生成失败，降级为纯文本搜索");
+            return textOnlySearchWithPermission(query, userDbId, userEffectiveTags, topK);
+        }
+
+        int recallK = topK * 30;
+        final int rrfK = 60;
+
+        // RRF 融合器
+        Map<String, Double> rrfScores = new HashMap<>();
+        Map<String, SearchResult> documentMap = new HashMap<>();
+
+        // ========================================
+        // 第一部分：原查询搜索
+        // ========================================
+
+        // 1.1 语义搜索（原查询）
+        float[] queryEmbedding = new float[queryVector.size()];
+        for (int i = 0; i < queryVector.size(); i++) {
+            queryEmbedding[i] = queryVector.get(i);
+        }
+        List<ChromaService.ChromaSearchResponse> chromaResponse = chromaService.search(
+                queryEmbedding, recallK, userDbId, userEffectiveTags);
+
+        int rank = 1;
+        for (ChromaService.ChromaSearchResponse hit : chromaResponse) {
+            String docId = hit.getFileMd5() + "_" + hit.getChunkId();
+            double rrfScore = 1.0 / (rrfK + rank);
+            rrfScores.merge(docId, rrfScore, Double::sum);
+            if (!documentMap.containsKey(docId)) {
+                documentMap.put(docId, new SearchResult(
+                        hit.getFileMd5(),
+                        hit.getChunkId(),
+                        hit.getTextContent(),
+                        Double.valueOf(hit.getScore()),
+                        query,
+                        null,
+                        false));
+            }
+            rank++;
+        }
+
+        // 1.2 BM25 搜索（原查询）
+        SearchResponse<EsDocument> bm25Response = esClient.search(s -> {
+            s.index("knowledge_base");
+            s.query(q -> q.bool(b -> b
+                    .must(mst -> mst.match(m -> m.field("textContent").query(query)))
+                    .filter(f -> f.bool(bf -> bf
+                            .should(s1 -> s1.term(t -> t.field("userId").value(userDbId)))
+                            .should(s2 -> s2.term(t -> t.field("public").value(true)))
+                            .should(s3 -> {
+                                if (userEffectiveTags.isEmpty()) {
+                                    return s3.matchNone(mn -> mn);
+                                } else if (userEffectiveTags.size() == 1) {
+                                    return s3.term(t -> t.field("orgTag").value(userEffectiveTags.get(0)));
+                                } else {
+                                    return s3.bool(inner -> {
+                                        userEffectiveTags.forEach(tag -> inner
+                                                .should(sh2 -> sh2.term(t -> t.field("orgTag").value(tag))));
+                                        return inner;
+                                    });
+                                }
+                            })))));
+            s.size(recallK);
+            return s;
+        }, EsDocument.class);
+
+        rank = 1;
+        for (co.elastic.clients.elasticsearch.core.search.Hit<EsDocument> hit : bm25Response.hits().hits()) {
+            if (hit.source() != null) {
+                String docId = hit.source().getFileMd5() + "_" + hit.source().getChunkId();
+                double rrfScore = 1.0 / (rrfK + rank);
+                rrfScores.merge(docId, rrfScore, Double::sum);
+                if (!documentMap.containsKey(docId)) {
+                    documentMap.put(docId, new SearchResult(
+                            hit.source().getFileMd5(),
+                            hit.source().getChunkId(),
+                            hit.source().getTextContent(),
+                            hit.score(),
+                            hit.source().getUserId(),
+                            hit.source().getOrgTag(),
+                            hit.source().isPublic()));
+                } else {
+                    SearchResult existing = documentMap.get(docId);
+                    if (existing.getUserId() == null) {
+                        existing.setUserId(hit.source().getUserId());
+                        existing.setOrgTag(hit.source().getOrgTag());
+                        existing.setIsPublic(hit.source().isPublic());
+                    }
+                }
+                rank++;
+            }
+        }
+
+        // ========================================
+        // 第二部分：Query Rewrite 扩展搜索
+        // ========================================
+        List<String> rewrittenQueries = queryRewriterService.rewriteQuery(query);
+        if (rewrittenQueries != null && !rewrittenQueries.isEmpty()) {
+            logger.info("Query Rewrite 改写结果: {}", rewrittenQueries);
+
+            for (String rewrittenQuery : rewrittenQueries) {
+                // 2.1 改写查询的语义搜索
+                List<Float> rewriteVector = embedToVectorList(rewrittenQuery);
+                if (rewriteVector != null) {
+                    float[] rewriteEmbedding = new float[rewriteVector.size()];
+                    for (int i = 0; i < rewriteVector.size(); i++) {
+                        rewriteEmbedding[i] = rewriteVector.get(i);
+                    }
+                    List<ChromaService.ChromaSearchResponse> rewriteChromaResponse = chromaService.search(
+                            rewriteEmbedding, recallK, userDbId, userEffectiveTags);
+
+                    int rewriteRank = 1;
+                    for (ChromaService.ChromaSearchResponse hit : rewriteChromaResponse) {
+                        String docId = hit.getFileMd5() + "_" + hit.getChunkId();
+                        double rrfScore = 1.0 / (rrfK + rewriteRank);
+                        rrfScores.merge(docId, rrfScore, Double::sum);
+                        if (!documentMap.containsKey(docId)) {
+                            documentMap.put(docId, new SearchResult(
+                                    hit.getFileMd5(),
+                                    hit.getChunkId(),
+                                    hit.getTextContent(),
+                                    Double.valueOf(hit.getScore()),
+                                    query,
+                                    null,
+                                    false));
+                        }
+                        rewriteRank++;
+                    }
+                }
+
+                // 2.2 改写查询的 BM25 搜索
+                SearchResponse<EsDocument> rewriteBm25Response = esClient.search(s -> {
+                    s.index("knowledge_base");
+                    s.query(q -> q.bool(b -> b
+                            .must(mst -> mst.match(m -> m.field("textContent").query(rewrittenQuery)))
+                            .filter(f -> f.bool(bf -> bf
+                                    .should(s1 -> s1.term(t -> t.field("userId").value(userDbId)))
+                                    .should(s2 -> s2.term(t -> t.field("public").value(true)))
+                                    .should(s3 -> {
+                                        if (userEffectiveTags.isEmpty()) {
+                                            return s3.matchNone(mn -> mn);
+                                        } else if (userEffectiveTags.size() == 1) {
+                                            return s3.term(t -> t.field("orgTag").value(userEffectiveTags.get(0)));
+                                        } else {
+                                            return s3.bool(inner -> {
+                                                userEffectiveTags.forEach(tag -> inner
+                                                        .should(sh2 -> sh2.term(t -> t.field("orgTag").value(tag))));
+                                                return inner;
+                                            });
+                                        }
+                                    })))));
+                    s.size(recallK);
+                    return s;
+                }, EsDocument.class);
+
+                int rewriteRank = 1;
+                for (co.elastic.clients.elasticsearch.core.search.Hit<EsDocument> hit : rewriteBm25Response.hits().hits()) {
+                    if (hit.source() != null) {
+                        String docId = hit.source().getFileMd5() + "_" + hit.source().getChunkId();
+                        double rrfScore = 1.0 / (rrfK + rewriteRank);
+                        rrfScores.merge(docId, rrfScore, Double::sum);
+                        if (!documentMap.containsKey(docId)) {
+                            documentMap.put(docId, new SearchResult(
+                                    hit.source().getFileMd5(),
+                                    hit.source().getChunkId(),
+                                    hit.source().getTextContent(),
+                                    hit.score(),
+                                    hit.source().getUserId(),
+                                    hit.source().getOrgTag(),
+                                    hit.source().isPublic()));
+                        } else {
+                            SearchResult existing = documentMap.get(docId);
+                            if (existing.getUserId() == null) {
+                                existing.setUserId(hit.source().getUserId());
+                                existing.setOrgTag(hit.source().getOrgTag());
+                                existing.setIsPublic(hit.source().isPublic());
+                            }
+                        }
+                        rewriteRank++;
+                    }
+                }
+            }
+        }
+
+        // ========================================
+        // RRF 融合 + Rerank
+        // ========================================
+
+        // 3. RRF 粗排结果（取前 topK * 2 给 Rerank）
+        List<SearchResult> rrfResults = rrfScores.entrySet().stream()
+                .sorted((e1, e2) -> Double.compare(e2.getValue(), e1.getValue()))
+                .limit(topK * 2)
+                .map(entry -> documentMap.get(entry.getKey()))
+                .toList();
+
+        // 4. Qwen3-Rerank 精排
+        List<SearchResult> reranked = qwenRerankService.rerank(query, rrfResults, topK);
+        List<SearchResult> finalResults = reranked.stream()
+                .filter(r -> r.getScore() >= relevanceThreshold)
+                .collect(Collectors.toList());
+
+        if (finalResults.isEmpty()) {
+            logger.warn("混合搜索所有文档相关性低于阈值 {}，无有效结果", relevanceThreshold);
+            return Collections.emptyList();
+        }
+
+        // 5. 设置最终排名
+        AtomicInteger currentRank = new AtomicInteger(1);
+        finalResults.forEach(item -> item.setRank(currentRank.getAndIncrement()));
+
+        logger.debug("混合搜索最终返回结果数量: {}", finalResults.size());
+        attachFileNames(finalResults);
+        return finalResults;
     }
 
     /**
