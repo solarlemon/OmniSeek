@@ -107,6 +107,12 @@ deepseek:
     model: deepseek-chat  # deepseek-chat 与 deepseek-reasoner 两个模型名将于北京时间 2026/07/24 23:59 弃用。分别对应 deepseek-v4-flash 的非思考与思考模式。
     key:  ${deepseek_api_key} # DeepSeek API Key 如果是本地就为空
 
+sub_model:
+  api:
+    url: https://api.siliconflow.cn/v1
+    model: Qwen/Qwen2.5-7B-Instruct
+    key:  ${sub_model_api_key}
+
 #deepseek:
 #  api:
 #    url: https://api.siliconflow.cn/v1/chat/completions
@@ -177,6 +183,22 @@ ai:
       假设性回答：
     temperature: 0.2
     max-tokens: 500
+    decision-prompt-template:
+      你是一个查询分析专家。判断用户的问题是否需要使用 HyDE（假设性文档嵌入）技术来增强搜索效果。
+
+      HyDE 适用于以下场景：
+      - 查询过短（如仅1-3个关键词），语义不完整，直接向量搜索定位不准
+      - 用户用口语化、模糊的表述提问，与知识库的正式文档表述差异大
+
+      不适用场景：
+      - 查询本身已经是清晰、完整的自然语言问句
+      - 查询包含了足够的上下文和关键词，直接搜索即可取得良好效果
+
+      只输出 YES 或 NO，不要输出任何其他文字。
+
+      用户问题：%s
+    decision-temperature: 0.1
+    decision-max-tokens: 200
   expand-query:
     prompt-template:
       你是一个查询改写专家。请根据用户原始问题，生成3个不同侧重点或更具体的子问题。
