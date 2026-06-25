@@ -3,6 +3,7 @@ package com.example.omniseek.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -19,32 +20,32 @@ public class QueryRewriterService {
 
         private static final Logger logger = LoggerFactory.getLogger(QueryRewriterService.class);
 
-        /**
-         * HyDE 适用条件：当 query 过短（如少于 10 个字符）时，使用 HyDE 生成假设性答案来扩展语义
-         * 短查询通常语义不完整，向量搜索定位不准，HyDE 能有效补充上下文
-         */
-        public static final int HYDE_MIN_QUERY_LENGTH = 10;
-
         private final WebClient webClient;
 
         private final String apiKey;
         private final String model;
+        private final Duration readTimeout;
         private final ObjectMapper objectMapper;
 
         @Value("${ai.hyde.prompt-template}")
         private String hydePromptTemplate;
 
+        @Value("${ai.hyde.decision-prompt-template}")
+        private String hydeDecisionPromptTemplate;
+
         @Value("${ai.expand-query.prompt-template}")
         private String expandPromptTemplate;
 
-        public QueryRewriterService(@Value("${deepseek.api.url}") String apiUrl,
-                        @Value("${deepseek.api.key}") String apiKey,
-                        @Value("${deepseek.api.model}") String model) {
+        public QueryRewriterService(@Value("${sub_model.api.url}") String apiUrl,
+                        @Value("${sub_model.api.key}") String apiKey,
+                        @Value("${sub_model.api.model}") String model,
+                        @Value("${sub_model.timeout.read:60}") long readTimeoutSeconds) {
                 this.apiKey = apiKey;
                 this.model = model;
+                this.readTimeout = Duration.ofSeconds(readTimeoutSeconds);
                 this.objectMapper = new ObjectMapper();
 
-                // 构建 WebClient
+                // 构建 WebClient，设置读取超时
                 WebClient.Builder builder = WebClient.builder().baseUrl(apiUrl);
                 if (apiKey != null && !apiKey.trim().isEmpty()) {
                         builder.defaultHeader("Authorization", "Bearer " + apiKey);
@@ -72,6 +73,7 @@ public class QueryRewriterService {
                                 .bodyValue(requestBody)
                                 .retrieve()
                                 .bodyToMono(String.class)
+                                .timeout(readTimeout)
                                 .map(this::extractContent)
                                 .doOnSuccess(content -> logger.debug("假设文档生成成功，长度：{}", content.length()))
                                 .onErrorResume(e -> {
@@ -102,7 +104,7 @@ public class QueryRewriterService {
                                                 Map.of("role", "system", "content", "你是一个专业的查询改写助手。"),
                                                 Map.of("role", "user", "content", prompt)),
                                 "temperature", 0.3,
-                                "max_tokens", 150,
+                                "max_tokens", 300,
                                 "stream", false);
 
                 try {
@@ -111,6 +113,7 @@ public class QueryRewriterService {
                                         .bodyValue(requestBody)
                                         .retrieve()
                                         .bodyToMono(String.class)
+                                        .timeout(readTimeout)
                                         .block();
 
                         if (response != null) {
@@ -148,24 +151,34 @@ public class QueryRewriterService {
 
         /**
          * 从响应 JSON 中提取 content
+         * 优先取 content，为空时依次回退 reasoning_content（硅基流动 Qwen）和 reasoning（sensenova）
          */
         private String extractContent(String responseBody) {
                 try {
                         JsonNode root = objectMapper.readTree(responseBody);
                         JsonNode choices = root.path("choices");
                         if (choices.isArray() && choices.size() > 0) {
-                                String content = choices.get(0)
-                                                .path("message")
-                                                .path("content")
-                                                .asText();
+                                JsonNode message = choices.get(0).path("message");
+                                // 优先取 content
+                                String content = message.path("content").asText();
                                 if (content != null && !content.isEmpty()) {
                                         return content;
                                 }
+                                // 回退到 reasoning_content（硅基流动上的 Qwen 等推理模型）
+                                String reasoningContent = message.path("reasoning_content").asText();
+                                if (reasoningContent != null && !reasoningContent.isEmpty()) {
+                                        return reasoningContent;
+                                }
+                                // 回退到 reasoning（sensenova 等模型）
+                                String reasoning = message.path("reasoning").asText();
+                                if (reasoning != null && !reasoning.isEmpty()) {
+                                        return reasoning;
+                                }
                         }
-                        throw new RuntimeException("DeepSeek API 返回内容为空");
+                        throw new RuntimeException("API 返回内容为空");
                 } catch (Exception e) {
                         logger.error("解析响应失败：{}", responseBody, e);
-                        throw new RuntimeException("解析 DeepSeek 响应失败", e);
+                        throw new RuntimeException("解析响应失败", e);
                 }
         }
 
@@ -175,25 +188,63 @@ public class QueryRewriterService {
         private final ConcurrentHashMap<String, String> hydeCache = new ConcurrentHashMap<>();
 
         /**
-         * 判断是否应该使用 HyDE
-         * 适用场景：
-         * 1. query 过短（如少于 10 个字符），语义不完整
-         * 2. 用户用简短关键词提问，向量搜索定位不准
+         * 使用 sub_model（轻量模型）智能判断是否应该使用 HyDE
+         * 通过 LLM 分析查询语义，判断是否需要语义扩展
+         * 替代原来的硬编码字符数判断
          *
          * @param query 原始查询
          * @return true 表示应该使用 HyDE，false 表示直接使用原查询
          */
         public boolean shouldUseHyDE(String query) {
-                if (query == null || query.isEmpty()) {
+                if (query == null || query.trim().isEmpty()) {
                         return false;
                 }
-                int length = query.trim().length();
-                boolean shouldHyde = length < HYDE_MIN_QUERY_LENGTH;
-                if (shouldHyde) {
-                        logger.debug("查询过短（{} 字符 < {}），将使用 HyDE 扩展语义: {}",
-                                        length, HYDE_MIN_QUERY_LENGTH, query);
+
+                String trimmed = query.trim();
+
+                // 极端短查询（1-2 字符）直接使用 HyDE，无需调用 LLM
+                if (trimmed.length() <= 2) {
+                        logger.debug("查询极短（{} 字符），直接使用 HyDE: {}", trimmed.length(), query);
+                        return true;
                 }
-                return shouldHyde;
+
+                try {
+                        String prompt = String.format(hydeDecisionPromptTemplate, query);
+
+                        Map<String, Object> requestBody = Map.of(
+                                        "model", model,
+                                        "messages", List.of(
+                                                        Map.of("role", "system", "content",
+                                                                        "你是一个精确的查询分析专家。"),
+                                                        Map.of("role", "user", "content", prompt)),
+                                        "temperature", 0.1,
+                                        "max_tokens", 200,
+                                        "stream", false);
+
+                        String response = webClient.post()
+                                        .uri("/chat/completions")
+                                        .bodyValue(requestBody)
+                                        .retrieve()
+                                        .bodyToMono(String.class)
+                                        .timeout(readTimeout)
+                                        .block();
+
+                        if (response != null) {
+                                String content = extractContent(response);
+                                boolean shouldHyde = "YES".equalsIgnoreCase(content.trim());
+                                logger.info("HyDE 决策 - query: {}, LLM 判断: {} => {}",
+                                                query, content.trim(), shouldHyde ? "使用 HyDE" : "不使用 HyDE");
+                                return shouldHyde;
+                        }
+                } catch (Exception e) {
+                        logger.warn("HyDE 决策 LLM 调用失败，降级使用长度判断", e);
+                }
+
+                // 降级策略：长度 >= 30 字符的完整问句不需要 HyDE，否则需要
+                boolean fallback = trimmed.length() < 30;
+                logger.debug("HyDE 决策降级，query 长度 {}，{}", trimmed.length(),
+                                fallback ? "使用 HyDE" : "不使用 HyDE");
+                return fallback;
         }
 
         /**
@@ -209,8 +260,7 @@ public class QueryRewriterService {
                         // HyDE 结果使用缓存，避免重复生成
                         return hydeCache.computeIfAbsent(query, q -> generateHypotheticalAnswerBlocking(q));
                 }
-                logger.debug("查询长度足够（{} 字符 >= {}），直接使用原查询: {}",
-                                query.trim().length(), HYDE_MIN_QUERY_LENGTH, query);
+                logger.debug("查询长度足够，直接使用原查询: {}", query);
                 return query;
         }
 }
