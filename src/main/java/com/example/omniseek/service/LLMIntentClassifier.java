@@ -25,9 +25,9 @@ public class LLMIntentClassifier {
     @Value("${ai.intent.prompt-template}")
     private String intentPromptTemplate;
 
-    public LLMIntentClassifier(@Value("${deepseek.api.url}") String apiUrl,
-            @Value("${deepseek.api.key}") String apiKey,
-            @Value("${deepseek.api.model}") String model,
+    public LLMIntentClassifier(@Value("${sub_model.api.url}") String apiUrl,
+            @Value("${sub_model.api.key}") String apiKey,
+            @Value("${sub_model.api.model}") String model,
             @Value("${ai.intent.llm.timeout-seconds:5}") long timeoutSeconds) {
         this.model = model;
         this.objectMapper = new ObjectMapper();
