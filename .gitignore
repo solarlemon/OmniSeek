@@ -80,3 +80,5 @@ frontend/build/
 src/main/resources/application.yml~
 
 homepage/
+
+claude.md
