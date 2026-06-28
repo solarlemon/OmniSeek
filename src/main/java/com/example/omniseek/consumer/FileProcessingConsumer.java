@@ -53,11 +53,11 @@ public class FileProcessingConsumer {
                 fileStream = new BufferedInputStream(fileStream);
             }
 
-            // 1. 使用 Tika 解析文件、分割文本内容为固定大小的块并保存文本内容到数据库
+            // 1. 使用 MinerU/Tika 解析文件、分割文本内容为固定大小的块并保存文本内容到数据库
             // 解析后这里简单使用固定长度切分，也有根据按照段落再降级到句子切分的策略
             parseService.parseAndSave(task.getFileMd5(), fileStream,
-                    task.getUserId(), task.getOrgTag(), task.isPublic());
-            log.info("文件解析完成，fileMd5: {}", task.getFileMd5());
+                    task.getFileName(), task.getUserId(), task.getOrgTag(), task.isPublic());
+            log.info("文件解析完成，fileMd5: {}, fileName: {}", task.getFileMd5(), task.getFileName());
 
             // 2. 调用外部模型向量化处理并存储到 Elasticsearch
             vectorizationService.vectorize(task.getFileMd5(),
