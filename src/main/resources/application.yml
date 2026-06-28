@@ -74,6 +74,11 @@ file:
     chunk-size: 512 # 每个文本块的最大字符数
     buffer-size: 8192    # 8KB 缓冲区
     max-memory-threshold: 0.8  # 80% 内存阈值
+    mineru:
+      base-url: https://mineru.net/api/v1/agent
+      timeout-millis: 120000
+      poll-interval-millis: 3000
+      max-poll-attempts: 100
 
 elasticsearch:
   host: 192.168.1.101       # Elasticsearch主机地址

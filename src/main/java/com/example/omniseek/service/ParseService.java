@@ -1,11 +1,24 @@
 package com.example.omniseek.service;
 
-import com.example.omniseek.entity.DocumentVector;
-import com.example.omniseek.repository.DocumentVectorRepository;
+import java.io.BufferedInputStream;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
+
 import org.apache.tika.exception.TikaException;
 import org.apache.tika.metadata.Metadata;
-import org.apache.tika.parser.ParseContext;
 import org.apache.tika.parser.AutoDetectParser;
+import org.apache.tika.parser.ParseContext;
 import org.apache.tika.sax.BodyContentHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,14 +26,16 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.io.*;
-import java.util.ArrayList;
-import java.util.List;
+import com.example.omniseek.entity.DocumentVector;
+import com.example.omniseek.repository.DocumentVectorRepository;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 @Service
 public class ParseService {
 
     private static final Logger logger = LoggerFactory.getLogger(ParseService.class);
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @Autowired
     private DocumentVectorRepository documentVectorRepository;
@@ -37,6 +52,20 @@ public class ParseService {
     @Value("${embedding.api.model:text-embedding-v4}")
     private String modelVersion;
 
+    @Value("${file.parsing.mineru.base-url:https://mineru.net/api/v1/agent}")
+    private String mineruBaseUrl;
+
+    @Value("${file.parsing.mineru.timeout-millis:120000}")
+    private int mineruTimeoutMillis;
+    
+    @Value("${file.parsing.mineru.max-poll-attempts:10}")
+    private int mineruMaxPollAttempts;
+
+    @Value("${file.parsing.mineru.poll-interval-millis:5000}")
+    private int mineruPollIntervalMillis;
+
+
+
     /**
      * 解析文件、分割文本内容为固定大小的块并保存文本内容到数据库
      *
@@ -48,14 +77,13 @@ public class ParseService {
      * @throws IOException   如果文件读取过程中发生错误
      * @throws TikaException 如果文件解析过程中发生错误
      */
-    public void parseAndSave(String fileMd5, InputStream fileStream,
+    public void parseAndSave(String fileMd5, InputStream fileStream, String fileName,
             String userId, String orgTag, boolean isPublic) throws IOException, TikaException {
-        logger.info("开始解析文件，fileMd5: {}, userId: {}, orgTag: {}, isPublic: {}",
-                fileMd5, userId, orgTag, isPublic);
-        // 使用 Apache Tika 提取文档内容
-        String textContent = extractText(fileStream);
-        // 将文本内容分割为固定大小的块（每块512个字符，前后重叠50个字符）
-        List<String> chunks = splitTextIntoChunks(textContent, chunkSize);
+        logger.info("开始解析文件，fileMd5: {}, fileName: {}, userId: {}, orgTag: {}, isPublic: {}",
+                fileMd5, fileName, userId, orgTag, isPublic);
+        String textContent = extractText(fileStream, fileName);
+        // 按照段落分割，避免分割在句子中间
+        List<String> chunks = splitTextIntoChunksWithSemantics(textContent, chunkSize);
 
         // 保存每个文本块到数据库
         saveChunks(fileMd5, chunks, modelVersion, userId, orgTag, isPublic);
@@ -72,8 +100,37 @@ public class ParseService {
      * @throws TikaException 如果文件解析过程中发生错误
      */
     public void parseAndSave(String fileMd5, InputStream fileStream) throws IOException, TikaException {
-        // 使用默认值调用新方法
-        parseAndSave(fileMd5, fileStream, "unknown", "DEFAULT", false);
+        parseAndSave(fileMd5, fileStream, "unknown.pdf", "unknown", "DEFAULT", false);
+    }
+
+    private String extractText(InputStream fileStream, String fileName) throws IOException, TikaException {
+        byte[] fileBytes = fileStream.readAllBytes();
+
+        try {
+            return extractTextWithMinerU(new ByteArrayInputStream(fileBytes), fileName);
+        } catch (Exception e) {
+            logger.warn("MinerU 解析失败，自动降级到 Tika。fileName={}, reason={}", fileName, e.getMessage());
+            return extractTextWithTika(new ByteArrayInputStream(fileBytes));
+        }
+    }
+
+    private String extractTextWithMinerU(InputStream fileStream, String fileName) throws IOException {
+        File tempFile = File.createTempFile("mineru-", getFileSuffix(fileName));
+        try {
+            Files.copy(fileStream, tempFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            String taskId = requestMinerUTask(fileName != null ? fileName : tempFile.getName());
+            uploadFileToMinerU(tempFile, taskId);
+            String markdown = pollMinerUResult(taskId);
+            if (markdown == null || markdown.isBlank()) {
+                throw new IOException("MinerU 解析结果为空");
+            }
+            return markdown;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("MinerU 解析被中断", e);
+        } finally {
+            Files.deleteIfExists(tempFile.toPath());
+        }
     }
 
     /**
@@ -84,7 +141,7 @@ public class ParseService {
      * @throws IOException   如果文件读取过程中发生错误
      * @throws TikaException 如果文件解析过程中发生错误
      */
-    private String extractText(InputStream fileStream) throws IOException, TikaException {
+    private String extractTextWithTika(InputStream fileStream) throws IOException, TikaException {
         // 检查内存使用情况
         checkMemoryThreshold();
 
@@ -140,6 +197,145 @@ public class ParseService {
                 throw new RuntimeException("内存不足，无法处理大文件。当前使用率: " +
                         String.format("%.2f%%", memoryUsage * 100));
             }
+        }
+    }
+
+    private String requestMinerUTask(String fileName) throws IOException {
+        URL url = new URL(mineruBaseUrl + "/parse/file");
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        connection.setRequestMethod("POST");
+        connection.setConnectTimeout(mineruTimeoutMillis);
+        connection.setReadTimeout(mineruTimeoutMillis);
+        connection.setDoOutput(true);
+        connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+
+        String jsonBody = String.format(
+                "{\"file_name\":\"%s\",\"language\":\"ch\",\"enable_table\":true,\"is_ocr\":false,\"enable_formula\":true}",
+                escapeJson(fileName));
+
+        try (OutputStream outputStream = connection.getOutputStream()) {
+            outputStream.write(jsonBody.getBytes(StandardCharsets.UTF_8));
+        }
+
+        String responseBody = readResponseBody(connection);
+        JsonNode jsonNode = OBJECT_MAPPER.readTree(responseBody);
+        if (connection.getResponseCode() != HttpURLConnection.HTTP_OK || jsonNode.path("code").asInt() != 0) {
+            throw new IOException("获取 MinerU 上传任务失败: " + jsonNode.path("msg").asText());
+        }
+
+        String taskId = jsonNode.path("data").path("task_id").asText();
+        String fileUrl = jsonNode.path("data").path("file_url").asText();
+        if (taskId == null || taskId.isBlank() || fileUrl == null || fileUrl.isBlank()) {
+            throw new IOException("MinerU 返回的 task_id 或 file_url 为空");
+        }
+
+        UploadContext.setFileUrl(taskId, fileUrl);
+        return taskId;
+    }
+
+    private void uploadFileToMinerU(File file, String taskId) throws IOException {
+        String fileUrl = UploadContext.getFileUrl(taskId);
+        if (fileUrl == null || fileUrl.isBlank()) {
+            throw new IOException("未获取到 MinerU 上传地址");
+        }
+
+        HttpURLConnection connection = (HttpURLConnection) new URL(fileUrl).openConnection();
+        connection.setRequestMethod("PUT");
+        connection.setConnectTimeout(mineruTimeoutMillis);
+        connection.setReadTimeout(mineruTimeoutMillis);
+        connection.setDoOutput(true);
+
+        try (OutputStream outputStream = connection.getOutputStream();
+                InputStream inputStream = new FileInputStream(file)) {
+            inputStream.transferTo(outputStream);
+        }
+
+        int responseCode = connection.getResponseCode();
+        if (responseCode != HttpURLConnection.HTTP_OK && responseCode != HttpURLConnection.HTTP_CREATED) {
+            throw new IOException("上传文件到 MinerU 失败，状态码: " + responseCode);
+        }
+    }
+
+    private String pollMinerUResult(String taskId) throws IOException, InterruptedException {
+        for (int attempts = 1; attempts <= mineruMaxPollAttempts; attempts++) {
+            HttpURLConnection connection = (HttpURLConnection) new URL(mineruBaseUrl + "/parse/" + taskId)
+                    .openConnection();
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(mineruTimeoutMillis);
+            connection.setReadTimeout(mineruTimeoutMillis);
+
+            String responseBody = readResponseBody(connection);
+            JsonNode jsonNode = OBJECT_MAPPER.readTree(responseBody);
+            if (connection.getResponseCode() == HttpURLConnection.HTTP_OK && jsonNode.path("code").asInt() == 0) {
+                JsonNode data = jsonNode.path("data");
+                String state = data.path("state").asText();
+                logger.info("MinerU 任务状态: attempt={}, taskId={}, state={}", attempts, taskId, state);
+
+                if ("done".equals(state)) {
+                    String markdownUrl = data.path("markdown_url").asText();
+                    if (markdownUrl == null || markdownUrl.isBlank()) {
+                        throw new IOException("MinerU 任务完成但 markdown_url 为空");
+                    }
+                    return downloadMarkdown(markdownUrl);
+                }
+
+                if ("failed".equals(state)) {
+                    throw new IOException("MinerU 解析失败: " + data.path("err_msg").asText());
+                }
+            }
+
+            Thread.sleep(mineruPollIntervalMillis);
+        }
+
+        throw new IOException("MinerU 轮询超时，taskId: " + taskId);
+    }
+
+    private String downloadMarkdown(String markdownUrl) throws IOException {
+        HttpURLConnection connection = (HttpURLConnection) new URL(markdownUrl).openConnection();
+        connection.setRequestMethod("GET");
+        connection.setConnectTimeout(mineruTimeoutMillis);
+        connection.setReadTimeout(mineruTimeoutMillis);
+        return readResponseBody(connection);
+    }
+
+    private String readResponseBody(HttpURLConnection connection) throws IOException {
+        InputStream stream = connection.getResponseCode() >= 400 ? connection.getErrorStream()
+                : connection.getInputStream();
+        if (stream == null) {
+            return "";
+        }
+        try (InputStream inputStream = stream;
+                ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+            inputStream.transferTo(outputStream);
+            return outputStream.toString(StandardCharsets.UTF_8);
+        }
+    }
+
+    private String getFileSuffix(String fileName) {
+        if (fileName == null || !fileName.contains(".")) {
+            return ".tmp";
+        }
+        return fileName.substring(fileName.lastIndexOf('.'));
+    }
+
+    private String escapeJson(String value) {
+        return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static class UploadContext {
+        private static String currentTaskId;
+        private static String currentFileUrl;
+
+        public static void setFileUrl(String taskId, String fileUrl) {
+            currentTaskId = taskId;
+            currentFileUrl = fileUrl;
+        }
+
+        public static String getFileUrl(String taskId) {
+            if (taskId.equals(currentTaskId)) {
+                return currentFileUrl;
+            }
+            return null;
         }
     }
 
