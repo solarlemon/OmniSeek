@@ -19,9 +19,6 @@ public class IntentRouterService {
     private final double confidenceThreshold;
 
     // 规则模式（可按需扩展）
-    private static final Pattern CALCULATOR_PATTERN = Pattern.compile(
-            ".*(计算|等于|是多少|\\+|\\-|\\*|/|平方|根号|积分|求导).*",
-            Pattern.CASE_INSENSITIVE);
     private static final Pattern GREETING_PATTERN = Pattern.compile(
             "^(你好|您好|hi|hello|嗨|早上好|下午好|晚上好)$",
             Pattern.CASE_INSENSITIVE);
@@ -75,10 +72,6 @@ public class IntentRouterService {
     }
 
     private RuleResult matchByRule(String message) {
-        // 计算器优先级最高
-        if (CALCULATOR_PATTERN.matcher(message).matches()) {
-            return new RuleResult(RouteType.CALCULATOR, true);
-        }
         // MCP 工具调用（知识库统计 + 网络搜索）
         if (TOOL_CALLING_PATTERN.matcher(message).matches()) {
             return new RuleResult(RouteType.TOOL_CALLING, true);
