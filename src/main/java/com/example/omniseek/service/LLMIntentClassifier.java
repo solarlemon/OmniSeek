@@ -101,7 +101,6 @@ public class LLMIntentClassifier {
     private boolean isValidIntent(String intent) {
         return intent != null && (intent.equals("KNOWLEDGE_BASE") ||
                 intent.equals("WEB_SEARCH") ||
-                intent.equals("CALCULATOR") ||
                 intent.equals("DIRECT_ANSWER"));
     }
 }
