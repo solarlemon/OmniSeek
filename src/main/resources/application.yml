@@ -261,8 +261,4 @@ ai:
   generation:
     temperature: 0.3
     max-tokens: 2000
-<<<<<<< HEAD
     top-p: 0.9
-=======
-    top-p: 0.9
->>>>>>> de96d9e89248e8300e44f7081e0e56b32cdcb059
