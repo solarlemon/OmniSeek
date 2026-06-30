@@ -12,7 +12,6 @@ OmniSeek 是一个基于知识库场景的智能问答与检索系统，采用 �
 - 会话管理、滑动窗口式压缩与历史归档
 
 ### 技术栈
-- 前端 ：Vue 3、Vite、TypeScript
 - 后端 ：Spring Boot、Spring WebSocket、Spring Security
 - 数据库 ：MySQL、Redis
 - 对象存储 ：MinIO
@@ -49,16 +48,12 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[用户提问] --> B[WebSocket / Chat 接入]
-    B --> C[意图路由]
-    C --> D[知识库问答]
-
-    D --> E[Query Rewrite / HyDE]
-    E --> F[混合检索<br/>向量检索 + BM25]
-    F --> G[Rerank 精排]
-    G --> H[构建上下文]
-    H --> I[LLM 生成回答]
-    I --> J[流式返回结果]
+    A[用户提问] --> B[意图路由]
+    B --> C[知识库问答]
+    C --> D[Query Rewrite / HyDE]
+    D --> E[混合检索<br/>向量检索 + BM25关键词检索]
+    E --> F[Rerank 精排]
+    F --> G[构建上下文LLM 生成回答]
 ```
 
 
