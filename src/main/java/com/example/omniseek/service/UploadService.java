@@ -351,6 +351,7 @@ public class UploadService {
      */
     public boolean isChunkUploaded(String fileMd5, int chunkIndex) {
         logger.debug("检查分片是否已上传 => fileMd5: {}, chunkIndex: {}", fileMd5, chunkIndex);
+        // 优先查 Redis
         try {
             if (chunkIndex < 0) {
                 logger.error("无效的分片索引 => fileMd5: {}, chunkIndex: {}", fileMd5, chunkIndex);
@@ -358,13 +359,25 @@ public class UploadService {
             }
             String redisKey = "upload:" + fileMd5;
             boolean isUploaded = redisTemplate.opsForValue().getBit(redisKey, chunkIndex);
-            logger.debug("分片上传状态 => fileMd5: {}, chunkIndex: {}, isUploaded: {}",
+            logger.debug("分片上传状态(Redis) => fileMd5: {}, chunkIndex: {}, isUploaded: {}",
                     fileMd5, chunkIndex, isUploaded);
             return isUploaded;
         } catch (Exception e) {
-            logger.error("检查分片上传状态失败 => fileMd5: {}, chunkIndex: {}, 错误: {}",
-                    fileMd5, chunkIndex, e.getMessage(), e);
-            return false; // 或者根据业务需求返回其他值
+            logger.warn("Redis 不可用，降级到数据库检查分片状态 => fileMd5: {}, chunkIndex: {}, 错误: {}",
+                    fileMd5, chunkIndex, e.getMessage());
+            // 降级到查数据库
+            try {
+                List<ChunkInfo> chunkInfos = chunkInfoRepository.findByFileMd5OrderByChunkIndexAsc(fileMd5);
+                boolean existsInDb = chunkInfos.stream()
+                        .anyMatch(chunk -> chunk.getChunkIndex() == chunkIndex);
+                logger.debug("分片上传状态(数据库) => fileMd5: {}, chunkIndex: {}, existsInDb: {}",
+                        fileMd5, chunkIndex, existsInDb);
+                return existsInDb;
+            } catch (Exception dbEx) {
+                logger.error("数据库检查分片状态也失败 => fileMd5: {}, chunkIndex: {}, 错误: {}",
+                        fileMd5, chunkIndex, dbEx.getMessage(), dbEx);
+                return false;
+            }
         }
     }
 
@@ -383,11 +396,11 @@ public class UploadService {
             }
             String redisKey = "upload:" + fileMd5;
             redisTemplate.opsForValue().setBit(redisKey, chunkIndex, true);
-            logger.debug("分片已标记为已上传 => fileMd5: {}, chunkIndex: {}", fileMd5, chunkIndex);
+            logger.debug("分片已标记为已上传(Redis) => fileMd5: {}, chunkIndex: {}", fileMd5, chunkIndex);
         } catch (Exception e) {
-            logger.error("标记分片为已上传失败 => fileMd5: {}, chunkIndex: {}, 错误: {}",
-                    fileMd5, chunkIndex, e.getMessage(), e);
-            throw new RuntimeException("Failed to mark chunk as uploaded", e);
+            logger.warn("Redis 不可用，标记分片失败，不影响后续流程 => fileMd5: {}, chunkIndex: {}, 错误: {}",
+                    fileMd5, chunkIndex, e.getMessage());
+            // Redis 失败不抛异常，靠数据库记录兜底
         }
     }
 
@@ -401,10 +414,11 @@ public class UploadService {
         try {
             String redisKey = "upload:" + fileMd5;
             redisTemplate.delete(redisKey);
-            logger.info("文件分片上传标记已删除 => fileMd5: {}", fileMd5);
+            logger.info("文件分片上传标记已删除(Redis) => fileMd5: {}", fileMd5);
         } catch (Exception e) {
-            logger.error("删除文件分片上传标记失败 => fileMd5: {}, 错误: {}", fileMd5, e.getMessage(), e);
-            throw new RuntimeException("Failed to delete file mark", e);
+            logger.warn("Redis 不可用，删除分片标记失败，不影响后续流程 => fileMd5: {}, 错误: {}",
+                    fileMd5, e.getMessage());
+            // Redis 失败不抛异常
         }
     }
 
@@ -417,6 +431,7 @@ public class UploadService {
     public List<Integer> getUploadedChunks(String fileMd5) {
         logger.info("获取已上传分片列表 => fileMd5: {}", fileMd5);
         List<Integer> uploadedChunks = new ArrayList<>();
+        // 优先查 Redis
         try {
             int totalChunks = getTotalChunks(fileMd5);
             logger.debug("文件总分片数 => fileMd5: {}, totalChunks: {}", fileMd5, totalChunks);
@@ -434,23 +449,37 @@ public class UploadService {
 
             if (bitmapData == null) {
                 logger.info("Redis中无分片状态记录 => fileMd5: {}", fileMd5);
+            } else {
+                // 解析bitmap，找出已上传的分片
+                for (int chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+                    if (isBitSet(bitmapData, chunkIndex)) {
+                        uploadedChunks.add(chunkIndex);
+                    }
+                }
+                logger.info("获取到已上传分片列表(Redis) => fileMd5: {}, 已上传数量: {}, 总分片数: {}, 优化方式: 一次性获取",
+                        fileMd5, uploadedChunks.size(), totalChunks);
                 return uploadedChunks;
             }
-
-            // 解析bitmap，找出已上传的分片
-            for (int chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-                if (isBitSet(bitmapData, chunkIndex)) {
-                    uploadedChunks.add(chunkIndex);
-                }
-            }
-
-            logger.info("获取到已上传分片列表 => fileMd5: {}, 已上传数量: {}, 总分片数: {}, 优化方式: 一次性获取",
-                    fileMd5, uploadedChunks.size(), totalChunks);
-            return uploadedChunks;
         } catch (Exception e) {
-            logger.error("获取已上传分片列表失败 => fileMd5: {}, 错误: {}", fileMd5, e.getMessage(), e);
-            throw new RuntimeException("Failed to get uploaded chunks", e);
+            logger.warn("Redis 不可用，降级到数据库获取已上传分片列表 => fileMd5: {}, 错误: {}",
+                    fileMd5, e.getMessage());
         }
+
+        // 降级到查数据库
+        try {
+            List<ChunkInfo> chunkInfos = chunkInfoRepository.findByFileMd5OrderByChunkIndexAsc(fileMd5);
+            uploadedChunks = chunkInfos.stream()
+                    .map(ChunkInfo::getChunkIndex)
+                    .collect(Collectors.toList());
+            logger.info("获取到已上传分片列表(数据库) => fileMd5: {}, 已上传数量: {}",
+                    fileMd5, uploadedChunks.size());
+        } catch (Exception dbEx) {
+            logger.error("数据库获取已上传分片列表也失败 => fileMd5: {}, 错误: {}",
+                    fileMd5, dbEx.getMessage(), dbEx);
+            // 返回空列表
+        }
+
+        return uploadedChunks;
     }
 
     /**
