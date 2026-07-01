@@ -609,7 +609,7 @@ public class HybridSearchService {
     }
 
     /**
-     * 仅使用文本匹配的搜索方法
+     * 仅使用文本匹配的搜索方法（仅公开文档）
      */
     private List<SearchResult> textOnlySearch(String query, int topK) throws Exception {
         SearchResponse<EsDocument> response = esClient.search(s -> s
@@ -631,6 +631,37 @@ public class HybridSearchService {
                             hit.score());
                 })
                 .toList();
+    }
+
+    /**
+     * 纯关键词检索（仅公开文档）
+     */
+    public List<SearchResult> keywordSearch(String query, int topK) {
+        try {
+            logger.debug("开始纯关键词搜索，查询: {}, topK: {}", query, topK);
+            List<SearchResult> results = textOnlySearch(query, topK);
+            attachFileNames(results);
+            return results;
+        } catch (Exception e) {
+            logger.error("纯关键词搜索失败", e);
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * 纯关键词检索（带权限过滤）
+     */
+    public List<SearchResult> keywordSearchWithPermission(String query, String userId, int topK) {
+        try {
+            String userDbId = getUserDbId(userId);
+            List<String> userEffectiveTags = getUserEffectiveOrgTags(userId);
+            List<SearchResult> results = textOnlySearchWithPermission(query, userDbId, userEffectiveTags, topK);
+            attachFileNames(results);
+            return results;
+        } catch (Exception e) {
+            logger.error("带权限的纯关键词搜索失败", e);
+            return new ArrayList<>();
+        }
     }
 
     /**
