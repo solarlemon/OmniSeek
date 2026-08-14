@@ -2,6 +2,7 @@ package com.example.omniseek.service;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
+import co.elastic.clients.elasticsearch.core.search.Hit;
 import com.example.omniseek.client.EmbeddingClient;
 import com.example.omniseek.dto.EsDocument;
 import com.example.omniseek.dto.SearchResult;
@@ -14,6 +15,7 @@ import com.example.omniseek.repository.FileUploadRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -23,6 +25,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -60,8 +66,15 @@ public class HybridSearchService {
     @Autowired
     private QueryRewriterService queryRewriterService;
 
+    @Autowired
+    @Qualifier("retrievalExecutor")
+    private Executor retrievalExecutor;
+
     @Value("${ai.relevance-threshold:0.5}")
     private double relevanceThreshold;
+
+    @Value("${search.retrieval-timeout-ms:30000}")
+    private long retrievalTimeoutMs;
 
     /**
      * 使用文本匹配和向量相似度进行混合搜索，支持权限过滤
@@ -213,83 +226,15 @@ public class HybridSearchService {
         // 第一部分：原查询搜索
         // ========================================
 
-        // 1.1 语义搜索（原查询）
-        float[] queryEmbedding = new float[queryVector.size()];
-        for (int i = 0; i < queryVector.size(); i++) {
-            queryEmbedding[i] = queryVector.get(i);
-        }
-        List<ChromaService.ChromaSearchResponse> chromaResponse = chromaService.search(
-                queryEmbedding, recallK, userDbId, userEffectiveTags);
+        float[] queryEmbedding = toFloatArray(queryVector);
+        CompletableFuture<List<ChromaService.ChromaSearchResponse>> chromaFuture = searchChromaAsync(
+                queryEmbedding, recallK, userDbId, userEffectiveTags, "原查询");
+        CompletableFuture<List<Hit<EsDocument>>> bm25Future = searchBm25WithPermissionAsync(
+                query, recallK, userDbId, userEffectiveTags, "原查询");
+        CompletableFuture.allOf(chromaFuture, bm25Future).join();
 
-        int rank = 1;
-        for (ChromaService.ChromaSearchResponse hit : chromaResponse) {
-            String docId = hit.getFileMd5() + "_" + hit.getChunkId();
-            double rrfScore = 1.0 / (rrfK + rank);
-            rrfScores.merge(docId, rrfScore, Double::sum);
-            if (!documentMap.containsKey(docId)) {
-                documentMap.put(docId, new SearchResult(
-                        hit.getFileMd5(),
-                        hit.getChunkId(),
-                        hit.getTextContent(),
-                        Double.valueOf(hit.getScore()),
-                        query,
-                        null,
-                        false));
-            }
-            rank++;
-        }
-
-        // 1.2 BM25 搜索（原查询）
-        SearchResponse<EsDocument> bm25Response = esClient.search(s -> {
-            s.index("knowledge_base");
-            s.query(q -> q.bool(b -> b
-                    .must(mst -> mst.match(m -> m.field("textContent").query(query)))
-                    .filter(f -> f.bool(bf -> bf
-                            .should(s1 -> s1.term(t -> t.field("userId").value(userDbId)))
-                            .should(s2 -> s2.term(t -> t.field("public").value(true)))
-                            .should(s3 -> {
-                                if (userEffectiveTags.isEmpty()) {
-                                    return s3.matchNone(mn -> mn);
-                                } else if (userEffectiveTags.size() == 1) {
-                                    return s3.term(t -> t.field("orgTag").value(userEffectiveTags.get(0)));
-                                } else {
-                                    return s3.bool(inner -> {
-                                        userEffectiveTags.forEach(tag -> inner
-                                                .should(sh2 -> sh2.term(t -> t.field("orgTag").value(tag))));
-                                        return inner;
-                                    });
-                                }
-                            })))));
-            s.size(recallK);
-            return s;
-        }, EsDocument.class);
-
-        rank = 1;
-        for (co.elastic.clients.elasticsearch.core.search.Hit<EsDocument> hit : bm25Response.hits().hits()) {
-            if (hit.source() != null) {
-                String docId = hit.source().getFileMd5() + "_" + hit.source().getChunkId();
-                double rrfScore = 1.0 / (rrfK + rank);
-                rrfScores.merge(docId, rrfScore, Double::sum);
-                if (!documentMap.containsKey(docId)) {
-                    documentMap.put(docId, new SearchResult(
-                            hit.source().getFileMd5(),
-                            hit.source().getChunkId(),
-                            hit.source().getTextContent(),
-                            hit.score(),
-                            hit.source().getUserId(),
-                            hit.source().getOrgTag(),
-                            hit.source().isPublic()));
-                } else {
-                    SearchResult existing = documentMap.get(docId);
-                    if (existing.getUserId() == null) {
-                        existing.setUserId(hit.source().getUserId());
-                        existing.setOrgTag(hit.source().getOrgTag());
-                        existing.setIsPublic(hit.source().isPublic());
-                    }
-                }
-                rank++;
-            }
-        }
+        mergeChromaResults(chromaFuture.join(), rrfScores, documentMap, rrfK, userDbId);
+        mergeEsResults(bm25Future.join(), rrfScores, documentMap, rrfK);
 
         // ========================================
         // 第二部分：Query Rewrite 扩展搜索
@@ -302,82 +247,19 @@ public class HybridSearchService {
                 // 2.1 改写查询的语义搜索
                 List<Float> rewriteVector = embedToVectorList(rewrittenQuery);
                 if (rewriteVector != null) {
-                    float[] rewriteEmbedding = new float[rewriteVector.size()];
-                    for (int i = 0; i < rewriteVector.size(); i++) {
-                        rewriteEmbedding[i] = rewriteVector.get(i);
-                    }
-                    List<ChromaService.ChromaSearchResponse> rewriteChromaResponse = chromaService.search(
-                            rewriteEmbedding, recallK, userDbId, userEffectiveTags);
+                    float[] rewriteEmbedding = toFloatArray(rewriteVector);
+                    CompletableFuture<List<ChromaService.ChromaSearchResponse>> rewriteChromaFuture = searchChromaAsync(
+                            rewriteEmbedding, recallK, userDbId, userEffectiveTags, "改写查询: " + rewrittenQuery);
+                    CompletableFuture<List<Hit<EsDocument>>> rewriteBm25Future = searchBm25WithPermissionAsync(
+                            rewrittenQuery, recallK, userDbId, userEffectiveTags, "改写查询: " + rewrittenQuery);
+                    CompletableFuture.allOf(rewriteChromaFuture, rewriteBm25Future).join();
 
-                    int rewriteRank = 1;
-                    for (ChromaService.ChromaSearchResponse hit : rewriteChromaResponse) {
-                        String docId = hit.getFileMd5() + "_" + hit.getChunkId();
-                        double rrfScore = 1.0 / (rrfK + rewriteRank);
-                        rrfScores.merge(docId, rrfScore, Double::sum);
-                        if (!documentMap.containsKey(docId)) {
-                            documentMap.put(docId, new SearchResult(
-                                    hit.getFileMd5(),
-                                    hit.getChunkId(),
-                                    hit.getTextContent(),
-                                    Double.valueOf(hit.getScore()),
-                                    query,
-                                    null,
-                                    false));
-                        }
-                        rewriteRank++;
-                    }
-                }
-
-                // 2.2 改写查询的 BM25 搜索
-                SearchResponse<EsDocument> rewriteBm25Response = esClient.search(s -> {
-                    s.index("knowledge_base");
-                    s.query(q -> q.bool(b -> b
-                            .must(mst -> mst.match(m -> m.field("textContent").query(rewrittenQuery)))
-                            .filter(f -> f.bool(bf -> bf
-                                    .should(s1 -> s1.term(t -> t.field("userId").value(userDbId)))
-                                    .should(s2 -> s2.term(t -> t.field("public").value(true)))
-                                    .should(s3 -> {
-                                        if (userEffectiveTags.isEmpty()) {
-                                            return s3.matchNone(mn -> mn);
-                                        } else if (userEffectiveTags.size() == 1) {
-                                            return s3.term(t -> t.field("orgTag").value(userEffectiveTags.get(0)));
-                                        } else {
-                                            return s3.bool(inner -> {
-                                                userEffectiveTags.forEach(tag -> inner
-                                                        .should(sh2 -> sh2.term(t -> t.field("orgTag").value(tag))));
-                                                return inner;
-                                            });
-                                        }
-                                    })))));
-                    s.size(recallK);
-                    return s;
-                }, EsDocument.class);
-
-                int rewriteRank = 1;
-                for (co.elastic.clients.elasticsearch.core.search.Hit<EsDocument> hit : rewriteBm25Response.hits().hits()) {
-                    if (hit.source() != null) {
-                        String docId = hit.source().getFileMd5() + "_" + hit.source().getChunkId();
-                        double rrfScore = 1.0 / (rrfK + rewriteRank);
-                        rrfScores.merge(docId, rrfScore, Double::sum);
-                        if (!documentMap.containsKey(docId)) {
-                            documentMap.put(docId, new SearchResult(
-                                    hit.source().getFileMd5(),
-                                    hit.source().getChunkId(),
-                                    hit.source().getTextContent(),
-                                    hit.score(),
-                                    hit.source().getUserId(),
-                                    hit.source().getOrgTag(),
-                                    hit.source().isPublic()));
-                        } else {
-                            SearchResult existing = documentMap.get(docId);
-                            if (existing.getUserId() == null) {
-                                existing.setUserId(hit.source().getUserId());
-                                existing.setOrgTag(hit.source().getOrgTag());
-                                existing.setIsPublic(hit.source().isPublic());
-                            }
-                        }
-                        rewriteRank++;
-                    }
+                    mergeChromaResults(rewriteChromaFuture.join(), rrfScores, documentMap, rrfK, userDbId);
+                    mergeEsResults(rewriteBm25Future.join(), rrfScores, documentMap, rrfK);
+                } else {
+                    CompletableFuture<List<Hit<EsDocument>>> rewriteBm25Future = searchBm25WithPermissionAsync(
+                            rewrittenQuery, recallK, userDbId, userEffectiveTags, "改写查询: " + rewrittenQuery);
+                    mergeEsResults(rewriteBm25Future.join(), rrfScores, documentMap, rrfK);
                 }
             }
         }
@@ -519,66 +401,20 @@ public class HybridSearchService {
             int recallK = topK * 30; // 召回窗口
             final int rrfK = 60; // RRF 平滑参数
 
-            // 1. 执行 Chroma 向量搜索
-            logger.debug("执行 Chroma 向量搜索...");
-            float[] queryEmbedding = new float[queryVector.size()];
-            for (int i = 0; i < queryVector.size(); i++) {
-                queryEmbedding[i] = queryVector.get(i);
-            }
-            List<ChromaService.ChromaSearchResponse> chromaResults = chromaService.search(
-                    queryEmbedding, recallK, null, null); // 空 userId 和 orgTags 表示只搜公开文档
-
-            // 2. 执行 BM25 文本搜索
-            logger.debug("执行 BM25 文本搜索...");
-            SearchResponse<EsDocument> bm25Response = esClient.search(s -> {
-                s.index("knowledge_base");
-                s.query(q -> q.bool(b -> b
-                        .must(mst -> mst.match(m -> m.field("textContent").query(query)))
-                        .filter(f -> f.term(t -> t.field("public").value(true))))); // 只搜公开文档
-                s.size(recallK);
-                return s;
-            }, EsDocument.class);
+            float[] queryEmbedding = toFloatArray(queryVector);
+            CompletableFuture<List<ChromaService.ChromaSearchResponse>> chromaFuture = searchChromaAsync(
+                    queryEmbedding, recallK, null, null, "公开检索");
+            CompletableFuture<List<Hit<EsDocument>>> bm25Future = searchPublicBm25Async(
+                    query, recallK, "公开检索");
+            CompletableFuture.allOf(chromaFuture, bm25Future).join();
 
             // 3. 手动实现 RRF 融合
             logger.debug("开始 RRF 融合 Chroma 和 ES 结果...");
             java.util.Map<String, Double> rrfScores = new java.util.HashMap<>();
             java.util.Map<String, SearchResult> documentMap = new java.util.HashMap<>();
 
-            // 处理 Chroma 结果
-            int rank = 1;
-            for (ChromaService.ChromaSearchResponse hit : chromaResults) {
-                String docId = hit.getFileMd5() + "_" + hit.getChunkId();
-                double rrfScore = 1.0 / (rrfK + rank);
-                rrfScores.merge(docId, rrfScore, Double::sum);
-
-                if (!documentMap.containsKey(docId)) {
-                    documentMap.put(docId, new SearchResult(
-                            hit.getFileMd5(),
-                            hit.getChunkId(),
-                            hit.getTextContent(),
-                            Double.valueOf(hit.getScore())));
-                }
-                rank++;
-            }
-
-            // 处理 BM25 结果
-            rank = 1;
-            for (co.elastic.clients.elasticsearch.core.search.Hit<EsDocument> hit : bm25Response.hits().hits()) {
-                if (hit.source() != null) {
-                    String docId = hit.source().getFileMd5() + "_" + hit.source().getChunkId();
-                    double rrfScore = 1.0 / (rrfK + rank);
-                    rrfScores.merge(docId, rrfScore, Double::sum);
-
-                    if (!documentMap.containsKey(docId)) {
-                        documentMap.put(docId, new SearchResult(
-                                hit.source().getFileMd5(),
-                                hit.source().getChunkId(),
-                                hit.source().getTextContent(),
-                                hit.score()));
-                    }
-                    rank++;
-                }
-            }
+            mergeChromaResults(chromaFuture.join(), rrfScores, documentMap, rrfK, null);
+            mergeEsResults(bm25Future.join(), rrfScores, documentMap, rrfK);
 
             // 4. 按 RRF 分数排序，取 topK
             List<SearchResult> results = rrfScores.entrySet().stream()
@@ -662,6 +498,149 @@ public class HybridSearchService {
             logger.error("带权限的纯关键词搜索失败", e);
             return new ArrayList<>();
         }
+    }
+
+    private CompletableFuture<List<ChromaService.ChromaSearchResponse>> searchChromaAsync(float[] queryEmbedding,
+            int recallK, String userDbId, List<String> userEffectiveTags, String label) {
+        return CompletableFuture.supplyAsync(
+                () -> chromaService.search(queryEmbedding, recallK, userDbId, userEffectiveTags),
+                retrievalExecutor)
+                .completeOnTimeout(Collections.emptyList(), retrievalTimeoutMs, TimeUnit.MILLISECONDS)
+                .exceptionally(e -> {
+                    logger.warn("Chroma 召回失败或超时，已降级为空结果，label: {}", label, e);
+                    return Collections.emptyList();
+                });
+    }
+
+    private CompletableFuture<List<Hit<EsDocument>>> searchBm25WithPermissionAsync(String query, int recallK,
+            String userDbId, List<String> userEffectiveTags, String label) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return searchBm25WithPermissionHits(query, recallK, userDbId, userEffectiveTags);
+            } catch (Exception e) {
+                throw new CompletionException(e);
+            }
+        }, retrievalExecutor)
+                .completeOnTimeout(Collections.emptyList(), retrievalTimeoutMs, TimeUnit.MILLISECONDS)
+                .exceptionally(e -> {
+                    logger.warn("ES BM25 召回失败或超时，已降级为空结果，label: {}", label, e);
+                    return Collections.emptyList();
+                });
+    }
+
+    private CompletableFuture<List<Hit<EsDocument>>> searchPublicBm25Async(String query, int recallK, String label) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return searchPublicBm25Hits(query, recallK);
+            } catch (Exception e) {
+                throw new CompletionException(e);
+            }
+        }, retrievalExecutor)
+                .completeOnTimeout(Collections.emptyList(), retrievalTimeoutMs, TimeUnit.MILLISECONDS)
+                .exceptionally(e -> {
+                    logger.warn("公开 ES BM25 召回失败或超时，已降级为空结果，label: {}", label, e);
+                    return Collections.emptyList();
+                });
+    }
+
+    private List<Hit<EsDocument>> searchBm25WithPermissionHits(String query, int recallK, String userDbId,
+            List<String> userEffectiveTags) throws Exception {
+        SearchResponse<EsDocument> response = esClient.search(s -> {
+            s.index("knowledge_base");
+            s.query(q -> q.bool(b -> b
+                    .must(mst -> mst.match(m -> m.field("textContent").query(query)))
+                    .filter(f -> f.bool(bf -> bf
+                            .should(s1 -> s1.term(t -> t.field("userId").value(userDbId)))
+                            .should(s2 -> s2.term(t -> t.field("public").value(true)))
+                            .should(s3 -> {
+                                if (userEffectiveTags.isEmpty()) {
+                                    return s3.matchNone(mn -> mn);
+                                } else if (userEffectiveTags.size() == 1) {
+                                    return s3.term(t -> t.field("orgTag").value(userEffectiveTags.get(0)));
+                                } else {
+                                    return s3.bool(inner -> {
+                                        userEffectiveTags.forEach(tag -> inner
+                                                .should(sh2 -> sh2.term(t -> t.field("orgTag").value(tag))));
+                                        return inner;
+                                    });
+                                }
+                            })))));
+            s.size(recallK);
+            return s;
+        }, EsDocument.class);
+        return response.hits().hits();
+    }
+
+    private List<Hit<EsDocument>> searchPublicBm25Hits(String query, int recallK) throws Exception {
+        SearchResponse<EsDocument> response = esClient.search(s -> {
+            s.index("knowledge_base");
+            s.query(q -> q.bool(b -> b
+                    .must(mst -> mst.match(m -> m.field("textContent").query(query)))
+                    .filter(f -> f.term(t -> t.field("public").value(true)))));
+            s.size(recallK);
+            return s;
+        }, EsDocument.class);
+        return response.hits().hits();
+    }
+
+    private void mergeChromaResults(List<ChromaService.ChromaSearchResponse> hits,
+            Map<String, Double> rrfScores, Map<String, SearchResult> documentMap, int rrfK, String userDbId) {
+        int rank = 1;
+        for (ChromaService.ChromaSearchResponse hit : hits) {
+            String docId = hit.getFileMd5() + "_" + hit.getChunkId();
+            double rrfScore = 1.0 / (rrfK + rank);
+            rrfScores.merge(docId, rrfScore, Double::sum);
+            if (!documentMap.containsKey(docId)) {
+                documentMap.put(docId, new SearchResult(
+                        hit.getFileMd5(),
+                        hit.getChunkId(),
+                        hit.getTextContent(),
+                        Double.valueOf(hit.getScore()),
+                        userDbId,
+                        null,
+                        false));
+            }
+            rank++;
+        }
+    }
+
+    private void mergeEsResults(List<Hit<EsDocument>> hits, Map<String, Double> rrfScores,
+            Map<String, SearchResult> documentMap, int rrfK) {
+        int rank = 1;
+        for (Hit<EsDocument> hit : hits) {
+            if (hit.source() != null) {
+                EsDocument source = hit.source();
+                String docId = source.getFileMd5() + "_" + source.getChunkId();
+                double rrfScore = 1.0 / (rrfK + rank);
+                rrfScores.merge(docId, rrfScore, Double::sum);
+                if (!documentMap.containsKey(docId)) {
+                    documentMap.put(docId, new SearchResult(
+                            source.getFileMd5(),
+                            source.getChunkId(),
+                            source.getTextContent(),
+                            hit.score(),
+                            source.getUserId(),
+                            source.getOrgTag(),
+                            source.isPublic()));
+                } else {
+                    SearchResult existing = documentMap.get(docId);
+                    if (existing.getUserId() == null) {
+                        existing.setUserId(source.getUserId());
+                        existing.setOrgTag(source.getOrgTag());
+                        existing.setIsPublic(source.isPublic());
+                    }
+                }
+                rank++;
+            }
+        }
+    }
+
+    private float[] toFloatArray(List<Float> vector) {
+        float[] embedding = new float[vector.size()];
+        for (int i = 0; i < vector.size(); i++) {
+            embedding[i] = vector.get(i);
+        }
+        return embedding;
     }
 
     /**
